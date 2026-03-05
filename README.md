@@ -4,6 +4,29 @@
 
 **slack-bridge** is a browser-based bridge that lets AI agents operate Slack through a real user account — no bot tokens, no `BOT` badges, no API restrictions. Just a human.
 
+## ⚠️ Disclaimer / 면책 조항
+
+> **English**: This tool uses Slack's internal web APIs, which are undocumented and unsupported. Use at your own risk.
+>
+> **한국어**: 이 도구는 Slack의 비공식 내부 API를 사용합니다. 사용에 따른 책임은 본인에게 있습니다.
+
+**Risks / 리스크:**
+- Slack may change internal APIs without notice / Slack이 내부 API를 예고 없이 변경할 수 있음
+- Your account could be suspended if detected as automated / 자동화가 감지되면 계정이 정지될 수 있음
+- No official support from Slack / Slack의 공식 지원 없음
+
+**Recommendations / 권장 사항:**
+- ✅ Personal or internal use only / 개인 또는 내부 용도로만 사용
+- ✅ Use a dedicated Slack account / 전용 Slack 계정 사용 권장
+- ❌ Do NOT use for commercial services at scale / 대규모 상업 서비스에 사용 금지
+- ❌ Do NOT use to impersonate others / 타인 사칭 금지
+
+**By using slack-bridge, you acknowledge these risks and accept full responsibility.**
+
+**slack-bridge를 사용함으로써 위 리스크를 인지하고 모든 책임을 수용하는 것에 동의합니다.**
+
+---
+
 ## The Problem
 
 Slack's Bot API is limited:
@@ -63,6 +86,23 @@ The browser is only used for **login** (handling OAuth, 2FA, etc.). After that, 
 - 🤖 MCP server interface
 - ⌨️ Typing indicators
 - 📋 Canvas & list manipulation
+
+## Prerequisites / 사전 준비
+
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| **Node.js** | >= 18.0.0 | `node --version` 으로 확인 |
+| **Chrome/Chromium** | Latest | Playwright가 자동 설치 |
+| **Slack Account** | — | 워크스페이스 정식 멤버 (게스트 ❌) |
+
+**Supported Platforms / 지원 플랫폼:**
+- ✅ macOS (Apple Silicon & Intel)
+- ✅ Linux (x64, arm64)
+- ⚠️ Windows (experimental / 실험적)
+
+**Network / 네트워크:**
+- Outbound HTTPS (443) to `*.slack.com`
+- WebSocket connections allowed / WebSocket 연결 허용 필요
 
 ## Quick Start
 
