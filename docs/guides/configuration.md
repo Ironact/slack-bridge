@@ -48,26 +48,25 @@ Use a `.env` file for local development (never commit it).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RECEIVER_MODE` | `polling` | Event mode: `polling`, `websocket`, `browser` |
+| `RECEIVER_MODE` | `rtm` | Event mode: `rtm` (WebSocket), `polling` (fallback) |
 
-#### Polling Mode
+#### RTM WebSocket (Primary)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WS_PING_INTERVAL_MS` | `30000` | Ping interval |
+| `WS_PONG_TIMEOUT_MS` | `10000` | Pong deadline |
+| `WS_RECONNECT_MAX_ATTEMPTS` | `10` | Max reconnection attempts |
+| `WS_RECONNECT_INITIAL_DELAY_MS` | `1000` | Initial reconnect delay |
+| `WS_RECONNECT_MAX_DELAY_MS` | `60000` | Max reconnect delay |
+
+#### Polling (Fallback)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `POLL_INTERVAL_MS` | `3000` | Base polling interval |
 | `POLL_CHANNELS_PER_CYCLE` | `3` | Channels to poll per cycle |
 | `POLL_STAGGER_MS` | `100` | Delay between requests in a cycle |
-| `POLL_IDLE_MULTIPLIER` | `2` | Slow down when no activity |
-| `POLL_IDLE_MAX_MS` | `30000` | Maximum idle interval (30s) |
-
-#### WebSocket Mode (Phase 2)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WS_PING_INTERVAL` | `30000` | Ping interval |
-| `WS_PONG_TIMEOUT` | `10000` | Pong deadline |
-| `WS_RECONNECT_MAX_ATTEMPTS` | `10` | Max reconnection attempts |
-| `WS_RECONNECT_INITIAL_DELAY` | `1000` | Initial reconnect delay |
 
 ### Filtering
 
@@ -129,7 +128,10 @@ BRIDGE_WEBHOOK_URL=http://localhost:3000/slack-events
 BRIDGE_WEBHOOK_SECRET=change-me-to-a-random-secret
 
 # --- Event Receiver ---
-RECEIVER_MODE=polling
+RECEIVER_MODE=rtm
+WS_PING_INTERVAL_MS=30000
+WS_PONG_TIMEOUT_MS=10000
+# Polling fallback
 POLL_INTERVAL_MS=3000
 POLL_CHANNELS_PER_CYCLE=3
 

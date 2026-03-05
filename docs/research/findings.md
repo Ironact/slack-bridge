@@ -43,15 +43,18 @@ token={xoxc-token}&channel=C123&text=hello
 
 ## 2. WebSocket / Real-Time Events
 
-### 🔴 CRITICAL: `rtm.connect` does NOT work with xoxc- tokens
+### ~~🔴 CRITICAL: `rtm.connect` does NOT work with xoxc- tokens~~
 
-This was our biggest wrong assumption. Research confirms:
+### 🟢 CORRECTED BY POC: `rtm.connect` WORKS with xoxc- tokens!
 
-- `rtm.connect` returns `not_allowed_token_type` for xoxc- tokens
-- It only accepts `xoxp-` (user OAuth tokens) or `xoxb-` (bot tokens)
-- `rtm.start` is fully deprecated since Sept 2022
-- Legacy custom bots discontinued **March 31, 2025**
-- Source: [Slack docs rtm.connect](https://docs.slack.dev/reference/methods/rtm.connect/)
+Original research was wrong. POC on 2026-03-06 confirmed:
+
+- `rtm.connect` **succeeds** with xoxc- token **when d cookie is present**
+- Returns WebSocket URL: `wss://wss-primary.slack.com/websocket/LEGACY_BOT:...`
+- The research sources likely tested without the d cookie → got `not_allowed_token_type`
+- `rtm.start` is fully deprecated since Sept 2022 (still true)
+- Legacy custom bots discontinued **March 31, 2025** (still true)
+- Source: [Our own POC](./poc-results.md), [Slack docs](https://docs.slack.dev/reference/methods/rtm.connect/)
 
 ### What the web client actually uses
 
@@ -113,7 +116,12 @@ Source: [ErikKalkoken/slackApiDoc](https://github.com/ErikKalkoken/slackApiDoc)
 - Pros: Zero reverse-engineering needed, browser handles everything
 - Cons: Resource-heavy (browser always running), fragile
 
-**Recommendation: Start with Path C (safest), then migrate to Path A (most elegant)**
+**~~Recommendation: Start with Path C (safest), then migrate to Path A (most elegant)~~**
+
+**UPDATED after POC: Start with RTM WebSocket (rtm.connect works!), polling as fallback.**
+
+Since `rtm.connect` works with xoxc- tokens (+ d cookie), we don't need any of these complex paths for Phase 1.
+See [POC results](./poc-results.md) for details.
 
 ## 3. Existing Projects (Prior Art)
 
@@ -237,7 +245,7 @@ Source: [Slack bot_users docs](https://github.com/slackhq/slack-api-docs/blob/ma
 
 | Question | Answer | Source |
 |----------|--------|--------|
-| Can `rtm.connect` work with xoxc-? | **NO** — returns `not_allowed_token_type` | Slack docs |
+| Can `rtm.connect` work with xoxc-? | **YES** — works when d cookie is present (POC confirmed) | [POC results](./poc-results.md) |
 | What headers are needed? | `Cookie: d=xoxd-...` + `Origin: https://app.slack.com` | shaharia.com, irslackd |
 | How to extract xoxc- token? | `localStorage.localConfig_v2` → teams → token | Multiple sources |
 | Do messages look human? | **YES** — no `app_id`, no `bot_id`, no BOT badge | Slack docs |

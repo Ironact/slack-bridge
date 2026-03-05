@@ -27,8 +27,8 @@ Slack (as a real human)
 ```
 
 **Auth**: Playwright browser login → extract token from `localStorage.localConfig_v2`
-**API**: Official SDK with `requestInterceptor` for cookie injection
-**Events**: Phase 1 polling → Phase 2 WebSocket → Fallback browser interception
+**API**: Official SDK with `requestInterceptor` for cookie injection (form-urlencoded only!)
+**Events**: RTM WebSocket via `rtm.connect` (polling as fallback)
 **Session**: `storageState()` for persistence, `auth.test` for validation
 
 ## 📦 Modules
@@ -52,25 +52,25 @@ Slack (as a real human)
 
 ## 🚀 Roadmap
 
-### Phase 1: MVP (Polling)
+### Phase 1: MVP (RTM WebSocket)
 - [ ] Project setup (TypeScript, SDK, Playwright, Fastify, Zod)
 - [ ] Auth: Playwright login (Google OAuth + email/password)
 - [ ] Auth: Token extraction from localStorage + d cookie
 - [ ] Auth: storageState save/restore
 - [ ] Session: Periodic validation + auto re-login
-- [ ] Client: SDK wrapper with requestInterceptor
+- [ ] Client: SDK wrapper with requestInterceptor (form-urlencoded!)
 - [ ] Client: Messages (send, edit, delete, history, thread)
 - [ ] Client: User/channel caching (lazy)
-- [ ] Events: Polling receiver (round-robin, rate-limit aware)
+- [ ] Events: RTM WebSocket receiver (rtm.connect → WSS)
+- [ ] Events: Ping/pong keepalive (30s interval)
+- [ ] Events: Reconnect with exponential backoff
+- [ ] Events: Polling fallback (if RTM fails)
 - [ ] Bridge: Fastify HTTP server (action endpoints)
 - [ ] Bridge: Webhook event delivery (HMAC signed)
 - [ ] CLI: login, start, status
 - [ ] .env validation with Zod
 
-### Phase 2: Real-Time
-- [ ] POC: `client.userBoot` → WebSocket URL
-- [ ] Events: Web client WebSocket receiver
-- [ ] Events: Auto-reconnect with backoff
+### Phase 2: Enhancements
 - [ ] Client: Reactions (add/remove)
 - [ ] Client: File upload (new v2 flow)
 - [ ] Client: Search
@@ -78,6 +78,7 @@ Slack (as a real human)
 - [ ] Client: Profile/status updates
 - [ ] Bridge: Event filtering (channel, mention, custom)
 - [ ] Bridge: Context enrichment (thread, user, channel)
+- [ ] Workspace metadata via client.userBoot (optional)
 
 ### Phase 3: Integration
 - [ ] OpenClaw channel plugin
@@ -91,15 +92,16 @@ Slack (as a real human)
 - [ ] Canvas/list manipulation
 - [ ] Presence management
 
-## 🔬 POC Checklist (Before Phase 1 Coding)
+## 🔬 POC Checklist ✅ COMPLETE
 
-Must pass all 5 before writing production code:
+All POCs passed on 2026-03-06. See [full results](docs/research/poc-results.md).
 
-- [ ] **POC 1**: Extract xoxc- token + d cookie from browser session
-- [ ] **POC 2**: `auth.test` via curl with extracted credentials
-- [ ] **POC 3**: `chat.postMessage` via curl — send a test message
-- [ ] **POC 4**: `client.userBoot` — check if WebSocket URL is returned
-- [ ] **POC 5**: Node SDK with `requestInterceptor` — verify it works
+- [x] **POC 1**: Token extraction from localStorage ✅
+- [x] **POC 2**: `auth.test` ✅ (user: vision, team: Muhak 3-7)
+- [x] **POC 3**: `chat.postMessage` ✅ (no BOT badge!)
+- [x] **POC 4**: `rtm.connect` ✅ (returns WSS URL — game changer!)
+- [x] **POC 5**: `conversations.history` + `client.userBoot` ✅
+- [ ] **POC 6**: Node SDK with `requestInterceptor` from server-side (validate during Phase 1)
 
 ## ⚠️ Known Risks
 
@@ -147,8 +149,8 @@ slack-bridge/
 │   │   ├── cache.ts          # User/channel cache
 │   │   └── types.ts          # Slack types
 │   ├── receiver/
-│   │   ├── polling.ts        # Polling event receiver
-│   │   ├── websocket.ts      # WebSocket receiver (Phase 2)
+│   │   ├── rtm.ts            # RTM WebSocket receiver (primary)
+│   │   ├── polling.ts        # Polling fallback receiver
 │   │   └── types.ts          # Event types
 │   ├── bridge/
 │   │   ├── server.ts         # Fastify HTTP server

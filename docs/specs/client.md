@@ -53,6 +53,12 @@ as the public API — the endpoints are identical. The only difference is authen
 
 By injecting the cookie, the official SDK works transparently with user credentials.
 
+### ⚠️ Content-Type: Must Use Form-Urlencoded
+
+POC confirmed: `application/json` content-type returns `not_authed` with xoxc- tokens.
+The SDK uses `application/x-www-form-urlencoded` by default, so this works out of the box.
+**Do not override the content type to JSON.**
+
 ## API Methods
 
 All methods below use the SDK's built-in types and error handling.
