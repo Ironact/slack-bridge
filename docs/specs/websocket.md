@@ -1,291 +1,311 @@
-# WebSocket Spec
+# Real-Time Events Spec
 
 ## Overview
 
-The WebSocket module maintains a persistent connection to Slack's real-time messaging system, receiving all workspace events as they happen. This is how slack-bridge knows when someone sends a message, reacts, or performs any action.
+> **Updated after research**: `rtm.connect` does NOT accept xoxc- tokens.
+> This spec documents the actual approaches for real-time event reception.
 
-## Connection
+The original spec assumed RTM WebSocket would work. It doesn't. This spec documents
+three viable paths, in order of implementation priority.
 
-### Obtaining the WebSocket URL
+## The Problem
 
-Slack provides WebSocket URLs via the `rtm.connect` API:
+Slack's RTM API (`rtm.connect`) only accepts `xoxp-` and `xoxb-` tokens.
+Our xoxc- (browser session) tokens return `not_allowed_token_type`.
+
+We need an alternative way to receive real-time events from Slack.
+
+## Path A: Polling (Phase 1 — Stable)
+
+The simplest and most reliable approach. Poll channels for new messages at intervals.
+
+### How it works
+
+```
+Every N seconds:
+  1. For each monitored channel:
+     - Call conversations.history(oldest: lastSeenTs)
+     - If new messages → emit events
+     - Update lastSeenTs
+  2. For DMs (if monitored):
+     - Call conversations.list(types: "im") to find active DMs
+     - Poll each active DM
+```
+
+### Polling Strategy
+
+```typescript
+interface PollingConfig {
+  // How often to poll each channel (ms)
+  intervalMs: number;              // Default: 3000 (3s)
+  
+  // Minimum interval to avoid rate limits (ms)
+  minIntervalMs: number;           // Default: 1000 (1s)
+  
+  // Maximum channels to poll per cycle
+  maxChannelsPerCycle: number;     // Default: 20
+  
+  // Stagger requests to avoid bursts
+  staggerMs: number;               // Default: 100 (100ms between each channel)
+  
+  // Back off when no activity detected
+  idleMultiplier: number;          // Default: 2 (double interval when idle)
+  idleMaxIntervalMs: number;       // Default: 30000 (30s max when idle)
+  
+  // Resume fast polling when activity detected
+  activeIntervalMs: number;        // Default: 2000 (2s when active)
+}
+```
+
+### Rate Limit Budget
+
+`conversations.history` is Tier 3: 50+ requests/minute.
+
+With 20 channels at 3s intervals:
+- 20 channels × 20 polls/min = 400 requests/min ❌ Way over limit
+
+**Solution: Round-robin polling**
+- Don't poll all channels every cycle
+- Prioritize channels with recent activity
+- Batch: poll 3-5 channels per cycle, rotate
+
+```
+Cycle 1: [general, dev-feed, funding]     → 3 API calls
+Cycle 2: [product, random, pa-dev]        → 3 API calls
+Cycle 3: [general, dev-feed, idea]        → 3 API calls (general repeats — active)
+...
+```
+
+At 3 channels per 3-second cycle: 60 requests/min → within Tier 3 limit ✅
+
+### Tracking State
+
+```typescript
+interface ChannelPollState {
+  channelId: string;
+  channelName: string;
+  lastMessageTs: string;        // Latest message timestamp seen
+  lastPolledAt: number;         // Unix ms when last polled
+  activityScore: number;        // Higher = more active = poll more often
+  consecutiveEmpty: number;     // How many polls returned 0 new messages
+}
+```
+
+### Advantages
+- ✅ Uses only documented, stable API methods
+- ✅ No reverse engineering
+- ✅ Works with xoxc- token (proven)
+- ✅ Simple to implement and debug
+
+### Disadvantages
+- ❌ Not truly real-time (1-5 second delay typical)
+- ❌ Consumes API rate limit budget
+- ❌ More channels = slower or higher rate limit usage
+
+## Path B: Web Client WebSocket (Phase 2 — Advanced)
+
+Replicate the Slack web client's internal WebSocket connection.
+
+### How it works
+
+```
+1. Call client.userBoot with xoxc- token + d cookie
+   → Returns workspace state + WebSocket URL
+2. Connect to wss://wss-primary.slack.com/link/...
+   → Authenticated via token in query params + cookies
+3. Receive real-time events as JSON frames
+   → Same events the web client sees
+```
+
+### client.userBoot
 
 ```http
-POST https://{workspace}.slack.com/api/rtm.connect
+POST https://app.slack.com/api/client.userBoot
 Content-Type: application/x-www-form-urlencoded
-Cookie: d={d-cookie}
+Cookie: d={xoxd-cookie}
 
 token={xoxc-token}
 ```
 
-Response:
+Expected response (based on reverse engineering):
 ```json
 {
   "ok": true,
-  "url": "wss://wss-primary.slack.com/websocket/...",
   "self": { "id": "U...", "name": "VISION" },
-  "team": { "id": "T...", "name": "Muhak 3-7" }
+  "team": { "id": "T...", "name": "Muhak 3-7" },
+  "url": "wss://wss-primary.slack.com/link/...",
+  "channels": [...],
+  "ims": [...],
+  "...": "..."
 }
 ```
 
-### Alternative: Client Boot WebSocket
-
-Modern Slack clients may use a different WebSocket endpoint obtained during the `client.boot` phase. The module should support both methods.
-
-## Connection Lifecycle
-
-```
-┌─────────┐    ┌──────────┐    ┌───────────┐    ┌──────────┐
-│  INIT   │───▶│CONNECTING│───▶│ CONNECTED │───▶│  READY   │
-└─────────┘    └──────────┘    └───────────┘    └──────────┘
-                    │                │                │
-                    │           ┌────▼────┐          │
-                    │           │  PING/  │          │
-                    │           │  PONG   │          │
-                    │           └─────────┘          │
-                    │                                │
-                    ▼                                ▼
-              ┌───────────┐                   ┌───────────┐
-              │  FAILED   │◀──────────────────│DISCONNECTED│
-              └───────────┘                   └─────┬─────┘
-                    │                               │
-                    └───────────┐    ┌──────────────┘
-                                ▼    ▼
-                          ┌──────────────┐
-                          │ RECONNECTING │
-                          │  (backoff)   │
-                          └──────┬───────┘
-                                 │
-                                 ▼
-                          ┌──────────┐
-                          │CONNECTING│
-                          └──────────┘
-```
-
-### States
-
-| State | Description |
-|-------|-------------|
-| `INIT` | Module created, not yet connected |
-| `CONNECTING` | Opening WebSocket connection |
-| `CONNECTED` | WebSocket open, waiting for hello |
-| `READY` | Received hello, fully operational |
-| `DISCONNECTED` | Connection lost |
-| `RECONNECTING` | Attempting to reconnect |
-| `FAILED` | Max reconnect attempts exceeded |
-
-## Event Types
-
-### Core Events
+### WebSocket Connection
 
 ```typescript
-// New message in any channel/DM
-interface MessageEvent {
-  type: 'message';
-  subtype?: string;          // undefined for normal messages
-  channel: string;
-  user: string;
-  text: string;
-  ts: string;
-  thread_ts?: string;
-  team: string;
-}
+const ws = new WebSocket(bootData.url, {
+  headers: {
+    'Cookie': `d=${dCookie}`,
+    'Origin': 'https://app.slack.com',
+    'User-Agent': 'Mozilla/5.0 ...'
+  }
+});
 
-// Message edited
-interface MessageChangedEvent {
-  type: 'message';
-  subtype: 'message_changed';
-  channel: string;
-  message: {
-    user: string;
-    text: string;
-    ts: string;
-    edited: { user: string; ts: string };
-  };
-  previous_message: { text: string; ts: string };
-}
-
-// Message deleted
-interface MessageDeletedEvent {
-  type: 'message';
-  subtype: 'message_deleted';
-  channel: string;
-  deleted_ts: string;
-  previous_message: { user: string; text: string; ts: string };
-}
-
-// Reaction added
-interface ReactionAddedEvent {
-  type: 'reaction_added';
-  user: string;
-  reaction: string;
-  item: { type: 'message'; channel: string; ts: string };
-  event_ts: string;
-}
-
-// Reaction removed
-interface ReactionRemovedEvent {
-  type: 'reaction_removed';
-  user: string;
-  reaction: string;
-  item: { type: 'message'; channel: string; ts: string };
-  event_ts: string;
-}
-
-// User typing
-interface UserTypingEvent {
-  type: 'user_typing';
-  channel: string;
-  user: string;
-}
-
-// Presence change
-interface PresenceChangeEvent {
-  type: 'presence_change';
-  user: string;
-  presence: 'active' | 'away';
-}
-
-// Channel events
-interface MemberJoinedEvent {
-  type: 'member_joined_channel';
-  user: string;
-  channel: string;
-  team: string;
-}
-
-interface MemberLeftEvent {
-  type: 'member_left_channel';
-  user: string;
-  channel: string;
-  team: string;
-}
+ws.on('message', (data) => {
+  const event = JSON.parse(data);
+  // event.type: "message", "reaction_added", "user_typing", etc.
+});
 ```
 
-### System Events
+### Event Types (same as original spec)
+
+All events from the original websocket.md spec remain valid here:
+- `message`, `message_changed`, `message_deleted`
+- `reaction_added`, `reaction_removed`
+- `user_typing`, `presence_change`
+- `member_joined_channel`, `member_left_channel`
+
+### Reconnection
+
+Same strategy as original spec:
+- Exponential backoff with jitter
+- Max 10 attempts
+- On token invalid → trigger session refresh
+
+### Risks
+- ⚠️ `client.userBoot` is undocumented — could change without notice
+- ⚠️ WebSocket URL format may change
+- ⚠️ Additional auth headers may be required that we haven't discovered
+
+### Needs POC validation before implementation
+
+## Path C: Browser WebSocket Interception (Fallback)
+
+Keep Playwright browser running and intercept WebSocket frames.
+
+### How it works
+
+```
+1. Login via Playwright (already implemented)
+2. Navigate to Slack workspace
+3. Intercept WebSocket frames via CDP (Chrome DevTools Protocol)
+4. Forward events to the bridge
+```
+
+### Implementation
 
 ```typescript
-// Connection established
-interface HelloEvent {
-  type: 'hello';
-}
+// After login, navigate to Slack
+await page.goto('https://app.slack.com/client/T0A37JX8BC4');
 
-// Keepalive
-interface PongEvent {
-  type: 'pong';
-  reply_to: number;
-}
+// Intercept WebSocket via CDP
+const cdp = await page.context().newCDPSession(page);
+await cdp.send('Network.enable');
 
-// Server-side disconnect
-interface DisconnectEvent {
-  type: 'disconnect';
-  reason: string;
-}
+cdp.on('Network.webSocketFrameReceived', (params) => {
+  const payload = JSON.parse(params.response.payloadData);
+  if (payload.type === 'message') {
+    // Forward to bridge
+  }
+});
 ```
 
-## Reconnection Strategy
+### Sending messages via browser
 
 ```typescript
-interface ReconnectConfig {
-  maxAttempts: number;          // 10
-  initialDelayMs: number;      // 1000 (1s)
-  maxDelayMs: number;          // 300000 (5min)
-  backoffMultiplier: number;   // 2
-  jitter: boolean;             // true (add randomness)
-}
+// Option 1: Use the API (preferred — faster, more reliable)
+await slackClient.chat.postMessage({ channel, text });
+
+// Option 2: Type in the browser (last resort)
+await page.click(`[data-qa="message_input"]`);
+await page.type(`[data-qa="message_input"]`, message);
+await page.keyboard.press('Enter');
 ```
 
-### Backoff Formula
-```
-delay = min(initialDelay * (multiplier ^ attempt), maxDelay)
-if jitter: delay = delay * (0.5 + random() * 0.5)
-```
+### Advantages
+- ✅ Zero reverse engineering — browser handles WebSocket natively
+- ✅ Always up-to-date with Slack's protocol
+- ✅ Guaranteed to work (it's literally the web client)
 
-### Reconnect Triggers
-| Trigger | Action |
-|---------|--------|
-| WebSocket `close` event | Reconnect immediately |
-| No pong for 30s | Force close + reconnect |
-| `disconnect` event from Slack | Reconnect with new URL |
-| Token invalid during reconnect | Trigger session refresh, then reconnect |
+### Disadvantages
+- ❌ Resource-heavy (~200-400MB RAM for Chrome)
+- ❌ Slower startup (browser launch)
+- ❌ Fragile (Slack UI changes can break selectors)
+- ❌ Only practical for single workspace
 
-## Heartbeat / Ping-Pong
+## Recommended Implementation Order
 
 ```
-Every 30 seconds:
-  1. Send ping: { "type": "ping", "id": {counter} }
-  2. Expect pong within 10 seconds
-  3. If no pong: mark connection as dead, trigger reconnect
+Phase 1: Path A (Polling)
+  → Works immediately
+  → Reliable
+  → Good enough for most use cases
+
+Phase 2: Path B (Web Client WS)  
+  → If POC validates client.userBoot
+  → True real-time
+  → More efficient than polling
+
+Fallback: Path C (Browser WS)
+  → If Path B breaks
+  → Always works
+  → Resource trade-off
 ```
-
-## Event Processing Pipeline
-
-```
-Raw WebSocket frame (JSON string)
-  → Parse JSON
-    → Type check (skip system events like pong)
-      → Validate event shape
-        → Emit typed event to listeners
-```
-
-### Filtering (before emission)
-
-Events are filtered based on configuration:
-- Skip bot messages (if `BRIDGE_INCLUDE_BOTS=false`)
-- Skip own messages (don't echo back our own sends)
-- Filter by channel (if `BRIDGE_CHANNELS` is set)
 
 ## TypeScript Interface
 
 ```typescript
-interface WebSocketReceiver extends EventEmitter {
-  // Connection
-  connect(): Promise<void>;
-  disconnect(): Promise<void>;
-  reconnect(): Promise<void>;
+interface EventReceiver extends EventEmitter {
+  // Lifecycle
+  start(): Promise<void>;
+  stop(): Promise<void>;
   
-  // State
-  getState(): ConnectionState;
-  isReady(): boolean;
-  
-  // Events (via EventEmitter)
-  on(event: 'message', handler: (e: MessageEvent) => void): this;
-  on(event: 'reaction_added', handler: (e: ReactionAddedEvent) => void): this;
-  on(event: 'reaction_removed', handler: (e: ReactionRemovedEvent) => void): this;
-  on(event: 'member_joined', handler: (e: MemberJoinedEvent) => void): this;
-  on(event: 'member_left', handler: (e: MemberLeftEvent) => void): this;
-  on(event: 'presence_change', handler: (e: PresenceChangeEvent) => void): this;
-  on(event: 'user_typing', handler: (e: UserTypingEvent) => void): this;
-  on(event: 'connected', handler: () => void): this;
-  on(event: 'disconnected', handler: (reason: string) => void): this;
+  // Events
+  on(event: 'message', handler: (e: SlackMessageEvent) => void): this;
+  on(event: 'reaction_added', handler: (e: SlackReactionEvent) => void): this;
+  on(event: 'message_changed', handler: (e: SlackMessageChangedEvent) => void): this;
+  on(event: 'message_deleted', handler: (e: SlackMessageDeletedEvent) => void): this;
   on(event: 'error', handler: (error: Error) => void): this;
   
-  // Metrics
-  getMetrics(): {
-    connectedAt: Date | null;
-    reconnectCount: number;
-    messagesReceived: number;
-    lastEventAt: Date | null;
-  };
+  // Info
+  getMode(): 'polling' | 'websocket' | 'browser';
+  getMetrics(): ReceiverMetrics;
 }
 
-type ConnectionState = 
-  | 'init' 
-  | 'connecting' 
-  | 'connected' 
-  | 'ready' 
-  | 'disconnected' 
-  | 'reconnecting' 
-  | 'failed';
+interface ReceiverMetrics {
+  mode: string;
+  startedAt: Date | null;
+  eventsReceived: number;
+  lastEventAt: Date | null;
+  // Polling-specific
+  pollCount?: number;
+  avgPollLatencyMs?: number;
+  // WebSocket-specific
+  wsConnectedAt?: Date | null;
+  wsReconnectCount?: number;
+}
 ```
 
 ## Environment Variables
 
 ```bash
-WS_PING_INTERVAL=30000          # Ping every 30s
-WS_PONG_TIMEOUT=10000           # Pong deadline
+# Event receiver mode
+RECEIVER_MODE=polling              # polling | websocket | browser
+
+# Polling config
+POLL_INTERVAL_MS=3000
+POLL_CHANNELS_PER_CYCLE=3
+POLL_STAGGER_MS=100
+POLL_IDLE_MULTIPLIER=2
+POLL_IDLE_MAX_MS=30000
+
+# WebSocket config (Phase 2)
+WS_PING_INTERVAL=30000
+WS_PONG_TIMEOUT=10000
 WS_RECONNECT_MAX_ATTEMPTS=10
 WS_RECONNECT_INITIAL_DELAY=1000
-WS_RECONNECT_MAX_DELAY=300000
-WS_RECONNECT_BACKOFF=2
+
+# Browser config (fallback)
+BROWSER_HEADLESS=true
+BROWSER_WS_INTERCEPT=true
 ```

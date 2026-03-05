@@ -1,213 +1,232 @@
 # Session Spec
 
+> **Updated**: Simplified based on research. Token lasts weeks/months.
+> No complex refresh logic needed — just detect death and re-login.
+
 ## Overview
 
-The Session Manager is responsible for keeping Slack credentials valid throughout the bridge's lifetime. It sits between the Auth layer and the Slack Client, ensuring that every API call uses fresh, working credentials.
+The Session Manager keeps Slack credentials valid. Since xoxc- tokens last
+weeks to months and have no refresh mechanism, the strategy is simple:
+**validate periodically, re-login when dead.**
+
+## Credentials
+
+| Credential | Format | Source | Lifetime |
+|-----------|--------|--------|----------|
+| `xoxc-` token | `xoxc-...` | `localStorage.localConfig_v2` | Weeks to months |
+| `d` cookie | `xoxd-...` | Browser cookies | Up to 10 years |
+| `storageState` | JSON file | Playwright `context.storageState()` | Same as above |
 
 ## Session Lifecycle
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                  Session Lifecycle                     │
-│                                                       │
-│  ┌─────┐   ┌──────┐   ┌────────┐   ┌──────────────┐ │
-│  │LOAD │──▶│VERIFY│──▶│ ACTIVE │──▶│REFRESH/REAUTH│ │
-│  └─────┘   └──────┘   └────────┘   └──────────────┘ │
-│                │            │               │         │
-│                ▼            ▼               ▼         │
-│           ┌────────┐  ┌─────────┐   ┌───────────┐   │
-│           │NO SESSION│ │PERIODIC │   │  NEW      │   │
-│           │→ LOGIN  │  │CHECK    │   │  SESSION  │   │
-│           └────────┘  └─────────┘   └───────────┘   │
-└──────────────────────────────────────────────────────┘
+Startup
+  │
+  ├── storageState file exists?
+  │   ├── Yes → Restore browser context → Extract token + cookie
+  │   │         → auth.test
+  │   │         ├── OK → ACTIVE ✅
+  │   │         └── Fail → Re-login
+  │   └── No → First-time login
+  │
+  ▼
+ACTIVE
+  │
+  │  Every 5 minutes: auth.test
+  │  ├── OK → Stay active
+  │  └── Fail (invalid_auth) → Re-login
+  │
+  ▼
+RE-LOGIN
+  │
+  ├── Open Playwright with saved storageState
+  │   ├── Already logged in? → Extract new token → ACTIVE
+  │   └── Login page? → Full login flow → Extract token → ACTIVE
+  └── Login fails → FAILED (notify user)
 ```
 
-## Startup Sequence
+## Storage
 
-```
-1. Check for stored session file
-   ├── Found → Decrypt → Validate token (auth.test)
-   │   ├── Valid → Enter ACTIVE state
-   │   └── Invalid → Attempt refresh
-   │       ├── Refresh OK → Enter ACTIVE state
-   │       └── Refresh failed → Trigger login
-   └── Not found → Trigger login
-```
+### Session file structure
 
-## Session Validation
-
-### Periodic Health Check
-
-Every `SESSION_CHECK_INTERVAL` (default: 5 minutes):
-
-```typescript
-async function validateSession(): Promise<boolean> {
-  const result = await slackApi.call('auth.test', { token });
-  
-  if (result.ok) {
-    return true;  // Session is healthy
-  }
-  
-  if (result.error === 'invalid_auth' || result.error === 'token_revoked') {
-    return false;  // Session needs refresh/re-login
-  }
-  
-  // Network error — don't invalidate, just log
-  return true;
-}
-```
-
-### Token Expiry Tracking
-
-```typescript
-interface SessionHealth {
-  lastValidated: Date;
-  lastUsed: Date;
-  consecutiveFailures: number;
-  tokenAge: number;          // seconds since extraction
-  estimatedExpiry: Date;     // based on observed patterns
-}
-```
-
-## Session Refresh
-
-When a token is found to be invalid:
-
-```
-1. Try to refresh using stored browser cookies
-   ├── Open Playwright with stored cookies
-   │   ├── Navigate to Slack → already logged in?
-   │   │   ├── Yes → Extract new xoxc- token
-   │   │   └── No → Full re-login needed
-   │   └── Save new session
-   └── Close browser
-```
-
-### Refresh vs Re-login
-
-| Condition | Action |
-|-----------|--------|
-| Token expired, cookies valid | Refresh (fast, no password needed) |
-| Cookies expired | Full re-login |
-| Password changed | Full re-login |
-| 2FA challenge | Headed mode re-login |
-
-## Session Storage
-
-### File Structure
 ```
 data/sessions/
-  ├── {workspace-id}.enc.json    # Encrypted session data
-  └── {workspace-id}.meta.json   # Unencrypted metadata
+  ├── {workspace-id}.state.json     # Playwright storageState
+  └── {workspace-id}.meta.json      # Metadata (unencrypted)
 ```
 
-### Metadata File (unencrypted)
+### storageState (Playwright)
+
+Playwright's `storageState()` captures everything needed to restore a session:
+- All cookies (including `d` cookie)
+- localStorage (including `localConfig_v2` with xoxc- token)
+- sessionStorage
+
+```typescript
+// Save
+await context.storageState({ path: 'data/sessions/T0A37JX8BC4.state.json' });
+
+// Restore
+const context = await browser.newContext({
+  storageState: 'data/sessions/T0A37JX8BC4.state.json'
+});
+```
+
+This means we don't need to separately encrypt/store tokens. The storageState
+file contains everything, and Playwright handles restoration.
+
+### Metadata file (unencrypted)
+
 ```json
 {
   "workspaceId": "T0A37JX8BC4",
   "workspaceName": "Muhak 3-7",
   "userId": "U...",
   "userName": "VISION",
-  "createdAt": "2026-03-05T09:00:00Z",
-  "lastRefreshed": "2026-03-05T18:00:00Z",
-  "refreshCount": 3
+  "email": "vision@ironact.net",
+  "lastValidated": "2026-03-05T18:00:00Z",
+  "loginCount": 1
 }
 ```
 
-### Session File (encrypted)
-Contains the full `SessionData` object including tokens and cookies.
+### Security of storageState
 
-## Multi-Workspace Support
+The storageState file contains tokens in plaintext. Protection:
 
-Each workspace gets its own session file:
+1. **File permissions**: `chmod 600` (owner read/write only)
+2. **Directory permissions**: `chmod 700` on `data/sessions/`
+3. **.gitignore**: `data/` is always gitignored
+4. **Optional encryption**: If `SLACK_SESSION_ENCRYPT_KEY` is set, encrypt the file at rest with AES-256-GCM
 
+For most deployments, file permissions are sufficient. Encryption is for
+environments where disk access is shared.
+
+## Token Extraction
+
+After login or storageState restoration:
+
+```typescript
+async function extractCredentials(page: Page): Promise<Credentials> {
+  // Extract xoxc- token from localStorage
+  const token = await page.evaluate(() => {
+    const config = JSON.parse(localStorage.getItem('localConfig_v2') || '{}');
+    const teams = config.teams || {};
+    const firstTeamId = Object.keys(teams)[0];
+    return firstTeamId ? teams[firstTeamId].token : null;
+  });
+  
+  // Extract d cookie
+  const cookies = await page.context().cookies();
+  const dCookie = cookies.find(c => c.name === 'd');
+  
+  if (!token || !dCookie) {
+    throw new Error('Failed to extract credentials');
+  }
+  
+  return {
+    token,              // xoxc-...
+    cookie: dCookie.value,  // xoxd-...
+  };
+}
 ```
-data/sessions/
-  ├── T0A37JX8BC4.enc.json      # Workspace 1
-  ├── T0A37JX8BC4.meta.json
-  ├── TXXXXXXXXXX.enc.json       # Workspace 2
-  └── TXXXXXXXXXX.meta.json
+
+## Validation
+
+### Periodic check (every 5 minutes)
+
+```typescript
+async function validateSession(client: WebClient): Promise<boolean> {
+  try {
+    const result = await client.auth.test();
+    return result.ok === true;
+  } catch (error) {
+    if (isTokenDead(error)) return false;
+    // Network error — don't invalidate, just log
+    return true;
+  }
+}
 ```
 
-The Session Manager can handle multiple concurrent sessions:
+### On API error
+
+When any SDK call returns a token-death error, immediately trigger re-login:
+
+```typescript
+const TOKEN_DEATH_ERRORS = [
+  'invalid_auth', 'token_revoked',
+  'account_inactive', 'token_expired', 'not_authed',
+];
+```
+
+## Re-login Flow
+
+```typescript
+async function relogin(config: AuthConfig): Promise<Credentials> {
+  const browser = await chromium.launch({ headless: true });
+  
+  // Try restoring saved session first
+  let context;
+  if (fs.existsSync(storageStatePath)) {
+    context = await browser.newContext({ storageState: storageStatePath });
+  } else {
+    context = await browser.newContext();
+  }
+  
+  const page = await context.newPage();
+  await page.goto(`https://${config.workspaceUrl}`);
+  
+  // Check if already logged in
+  const isLoggedIn = await page.url().includes('/client/');
+  
+  if (!isLoggedIn) {
+    // Full login flow (see auth.md)
+    await performLogin(page, config);
+  }
+  
+  // Extract fresh credentials
+  const credentials = await extractCredentials(page);
+  
+  // Save updated storageState
+  await context.storageState({ path: storageStatePath });
+  
+  await browser.close();
+  return credentials;
+}
+```
+
+## TypeScript Interface
 
 ```typescript
 interface SessionManager {
-  // Get session for a workspace
-  getSession(workspaceId: string): Promise<SessionData>;
+  // Initialize (load or login)
+  initialize(): Promise<void>;
   
-  // Get all active sessions
-  getAllSessions(): Promise<SessionData[]>;
+  // Get current credentials (triggers re-login if invalid)
+  getCredentials(): Promise<{ token: string; cookie: string }>;
   
-  // Refresh a specific session
-  refreshSession(workspaceId: string): Promise<SessionData>;
+  // Report that a call failed with token error
+  reportTokenDeath(): Promise<void>;
   
-  // Invalidate and re-login
-  reauth(workspaceId: string): Promise<SessionData>;
+  // Manual re-login
+  forceRelogin(): Promise<void>;
   
   // Health
-  getHealth(workspaceId: string): SessionHealth;
+  getHealth(): SessionHealth;
+}
+
+interface SessionHealth {
+  status: 'active' | 'refreshing' | 'failed';
+  lastValidated: Date | null;
+  tokenAge: number;          // seconds since extraction
+  loginCount: number;
 }
 ```
-
-## Credential Provider Interface
-
-Other components request credentials through a clean interface:
-
-```typescript
-interface CredentialProvider {
-  // Get current valid credentials (may trigger refresh)
-  getCredentials(workspaceId: string): Promise<{
-    token: string;     // xoxc-...
-    cookie: string;    // d=...
-  }>;
-  
-  // Report that credentials failed (triggers refresh)
-  reportInvalid(workspaceId: string): Promise<void>;
-}
-```
-
-This way, the Slack Client never deals with session management directly — it just asks for credentials and reports failures.
 
 ## Environment Variables
 
 ```bash
-# Session storage
 SLACK_SESSION_DIR=./data/sessions
-SLACK_SESSION_ENCRYPT_KEY=my-encryption-key
-
-# Health checks
+SLACK_SESSION_ENCRYPT_KEY=          # Optional, for at-rest encryption
 SESSION_CHECK_INTERVAL=300000       # 5 minutes
-SESSION_MAX_AGE=86400000            # 24 hours (force refresh)
-SESSION_MAX_FAILURES=3              # Consecutive failures before re-login
-
-# Browser (for refresh)
-SLACK_AUTH_HEADED=false
-SLACK_AUTH_TIMEOUT=120000
-```
-
-## Error States
-
-| State | Trigger | Recovery |
-|-------|---------|----------|
-| `token_expired` | auth.test returns invalid_auth | Auto-refresh |
-| `cookies_expired` | Refresh fails (login page shown) | Re-login |
-| `account_locked` | Too many login attempts | Wait + notify user |
-| `password_changed` | Login fails with stored creds | Notify user, wait for new password |
-| `2fa_required` | Login needs 2FA code | Switch to headed mode |
-| `workspace_removed` | Workspace no longer exists | Remove session, notify user |
-
-## Events
-
-The Session Manager emits events for monitoring:
-
-```typescript
-interface SessionEvents {
-  'session:active': (workspaceId: string) => void;
-  'session:refreshing': (workspaceId: string) => void;
-  'session:refreshed': (workspaceId: string) => void;
-  'session:expired': (workspaceId: string) => void;
-  'session:reauth_needed': (workspaceId: string) => void;
-  'session:error': (workspaceId: string, error: Error) => void;
-}
+SESSION_MAX_FAILURES=3              # Re-login after 3 consecutive failures
 ```

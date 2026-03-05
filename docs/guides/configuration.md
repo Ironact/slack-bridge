@@ -1,8 +1,11 @@
 # Configuration Guide
 
+> **Updated**: Reflects SDK-based approach and polling-first architecture.
+
 ## Overview
 
-All configuration is managed via environment variables. No config files, no hardcoded values. Use a `.env` file for local development (never commit it).
+All configuration is managed via environment variables. No config files, no hardcoded values.
+Use a `.env` file for local development (never commit it).
 
 ## Environment Variables
 
@@ -18,7 +21,7 @@ All configuration is managed via environment variables. No config files, no hard
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SLACK_PASSWORD` | — | Password for email/password login |
-| `SLACK_AUTH_METHOD` | `auto` | Login method: `auto`, `google`, `password`, `sso` |
+| `SLACK_AUTH_METHOD` | `auto` | Login method: `auto`, `google`, `password` |
 | `SLACK_AUTH_HEADED` | `false` | Show browser window during login |
 | `SLACK_AUTH_TIMEOUT` | `120000` | Login timeout in ms |
 
@@ -27,21 +30,44 @@ All configuration is managed via environment variables. No config files, no hard
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SLACK_SESSION_DIR` | `./data/sessions` | Session storage directory |
-| `SLACK_SESSION_ENCRYPT_KEY` | — | Encryption key for stored sessions |
-| `SESSION_CHECK_INTERVAL` | `300000` | Token validation interval (ms) |
-| `SESSION_MAX_AGE` | `86400000` | Force refresh after this age (ms) |
+| `SLACK_SESSION_ENCRYPT_KEY` | — | Optional encryption key for session files |
+| `SESSION_CHECK_INTERVAL` | `300000` | Token validation interval (5 min) |
 | `SESSION_MAX_FAILURES` | `3` | Re-login after N consecutive failures |
 
-### Bridge
+### Bridge Server
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BRIDGE_MODE` | `webhook` | Delivery mode: `webhook`, `websocket`, `openclaw` |
 | `BRIDGE_PORT` | `3001` | HTTP server port |
 | `BRIDGE_HOST` | `127.0.0.1` | HTTP server bind address |
 | `BRIDGE_AUTH_TOKEN` | — | Bearer token for API authentication |
-| `BRIDGE_WEBHOOK_URL` | — | Webhook destination URL |
-| `BRIDGE_WEBHOOK_SECRET` | — | HMAC signing key for webhooks |
+| `BRIDGE_WEBHOOK_URL` | — | Webhook destination URL for events |
+| `BRIDGE_WEBHOOK_SECRET` | — | HMAC signing key for webhook payloads |
+
+### Event Receiver
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RECEIVER_MODE` | `polling` | Event mode: `polling`, `websocket`, `browser` |
+
+#### Polling Mode
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POLL_INTERVAL_MS` | `3000` | Base polling interval |
+| `POLL_CHANNELS_PER_CYCLE` | `3` | Channels to poll per cycle |
+| `POLL_STAGGER_MS` | `100` | Delay between requests in a cycle |
+| `POLL_IDLE_MULTIPLIER` | `2` | Slow down when no activity |
+| `POLL_IDLE_MAX_MS` | `30000` | Maximum idle interval (30s) |
+
+#### WebSocket Mode (Phase 2)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WS_PING_INTERVAL` | `30000` | Ping interval |
+| `WS_PONG_TIMEOUT` | `10000` | Pong deadline |
+| `WS_RECONNECT_MAX_ATTEMPTS` | `10` | Max reconnection attempts |
+| `WS_RECONNECT_INITIAL_DELAY` | `1000` | Initial reconnect delay |
 
 ### Filtering
 
@@ -52,7 +78,7 @@ All configuration is managed via environment variables. No config files, no hard
 | `BRIDGE_INCLUDE_BOTS` | `false` | Include bot messages in events |
 | `BRIDGE_SELF_EXCLUDE` | `true` | Exclude own messages from events |
 
-### Context
+### Context Enrichment
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -60,15 +86,15 @@ All configuration is managed via environment variables. No config files, no hard
 | `BRIDGE_CONTEXT_CHANNEL_DEPTH` | `10` | Recent channel messages for context |
 | `BRIDGE_CONTEXT_INCLUDE_PROFILES` | `true` | Include user profiles in events |
 
-### WebSocket (Slack connection)
+### Slack API
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WS_PING_INTERVAL` | `30000` | Ping interval (ms) |
-| `WS_PONG_TIMEOUT` | `10000` | Pong deadline (ms) |
-| `WS_RECONNECT_MAX_ATTEMPTS` | `10` | Max reconnection attempts |
-| `WS_RECONNECT_INITIAL_DELAY` | `1000` | Initial reconnect delay (ms) |
-| `WS_RECONNECT_MAX_DELAY` | `300000` | Max reconnect delay (ms) |
+| `SLACK_API_MAX_PER_MINUTE` | `40` | Global API rate limit (conservative) |
+| `SLACK_API_MIN_DELAY_MS` | `100` | Minimum delay between API calls |
+| `SLACK_API_LOG_LEVEL` | `info` | SDK log level |
+| `SLACK_CACHE_USER_TTL_MS` | `3600000` | User cache TTL (1 hour) |
+| `SLACK_CACHE_CHANNEL_TTL_MS` | `1800000` | Channel cache TTL (30 min) |
 
 ### Logging
 
@@ -93,24 +119,24 @@ SLACK_AUTH_METHOD=auto
 
 # --- Session ---
 SLACK_SESSION_DIR=./data/sessions
-SLACK_SESSION_ENCRYPT_KEY=change-me-to-a-strong-random-string
+SLACK_SESSION_ENCRYPT_KEY=
 
-# --- Bridge ---
-BRIDGE_MODE=webhook
+# --- Bridge Server ---
 BRIDGE_PORT=3001
 BRIDGE_HOST=127.0.0.1
 BRIDGE_AUTH_TOKEN=change-me-to-a-random-token
 BRIDGE_WEBHOOK_URL=http://localhost:3000/slack-events
 BRIDGE_WEBHOOK_SECRET=change-me-to-a-random-secret
 
+# --- Event Receiver ---
+RECEIVER_MODE=polling
+POLL_INTERVAL_MS=3000
+POLL_CHANNELS_PER_CYCLE=3
+
 # --- Filtering ---
 BRIDGE_CHANNELS=
 BRIDGE_MENTION_ONLY=false
 BRIDGE_INCLUDE_BOTS=false
-
-# --- Context ---
-BRIDGE_CONTEXT_THREAD_DEPTH=20
-BRIDGE_CONTEXT_CHANNEL_DEPTH=10
 
 # --- Logging ---
 LOG_LEVEL=info
@@ -120,20 +146,20 @@ LOG_FORMAT=text
 
 ## Validation
 
-All environment variables are validated at startup using Zod schemas. If required variables are missing or values are invalid, the process exits with a clear error message:
+All environment variables are validated at startup using Zod schemas.
+Missing required variables or invalid values cause a clear error:
 
 ```
 ❌ Configuration error:
   - SLACK_WORKSPACE_URL is required
   - BRIDGE_PORT must be a number between 1 and 65535
-  - BRIDGE_MODE must be one of: webhook, websocket, openclaw
+  - RECEIVER_MODE must be one of: polling, websocket, browser
 ```
 
 ## Runtime Config Updates
 
-Environment variables are read once at startup. To change configuration:
-
+Environment variables are read once at startup. To change:
 1. Update `.env` file
 2. Restart slack-bridge
 
-Hot-reload is not supported to avoid complexity and ensure consistency.
+No hot-reload — keeps things simple and predictable.
