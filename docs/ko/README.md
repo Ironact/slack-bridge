@@ -113,6 +113,7 @@ slack-bridge start
 | [브릿지 스펙](../specs/bridge.md) | AI 에이전트 연동 |
 | [세션 스펙](../specs/session.md) | 세션 관리 |
 | [보안](../guides/security.md) | 보안 모델 |
+| [탐지 회피](../guides/anti-detection.md) | 자연스러운 사용 가이드 |
 | [설정](../guides/configuration.md) | 환경변수 |
 
 ## Bot API vs slack-bridge

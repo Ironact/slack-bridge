@@ -148,6 +148,7 @@ See the [Configuration Guide](docs/guides/configuration.md) for details.
 | [Bridge Spec](docs/specs/bridge.md) | AI agent integration layer |
 | [Session Spec](docs/specs/session.md) | Session lifecycle management |
 | [Security](docs/guides/security.md) | Security model and best practices |
+| [Anti-Detection](docs/guides/anti-detection.md) | Human-like behavior & rate limits |
 | [Configuration](docs/guides/configuration.md) | Environment variables and setup |
 | [한국어 문서](docs/ko/README.md) | Korean documentation |
 
@@ -169,7 +170,7 @@ The browser closes after login. Everything runs via API calls from that point.
 | Setup | Create Slack App + OAuth | Just login |
 | Permissions | Limited by scopes | Everything a human can do |
 | Dual identity | Bot + user coexist | Single identity |
-| Rate limits | Strict | Web client limits (generous) |
+| Rate limits | Strict (per scope) | Web client limits (no official SLA) |
 | Real-time | Events API / Socket Mode | Native WebSocket |
 
 ## Security
