@@ -31,6 +31,11 @@ export const envSchema = z.object({
   // Auth validation interval (ms)
   AUTH_VALIDATION_INTERVAL_MS: z.coerce.number().default(300_000), // 5 min
 
+  // OpenClaw
+  OPENCLAW_GATEWAY_URL: z.string().url().optional(),
+  OPENCLAW_GATEWAY_TOKEN: z.string().optional(),
+  SLACK_BOT_USER_ID: z.string().optional(),
+
   // Browser
   BROWSER_HEADLESS: z
     .string()
