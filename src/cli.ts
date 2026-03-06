@@ -19,6 +19,8 @@ import {
 import { createBridgeServer, startBridgeServer } from './bridge/server.js';
 import { SlackClient } from './client/slack.js';
 import { RTMReceiver } from './receiver/rtm.js';
+import { deliverWebhook } from './bridge/webhook.js';
+import { mapRTMEvent } from './receiver/mapper.js';
 
 const program = new Command();
 
@@ -112,6 +114,16 @@ program
 
       rtm.on('slack_event', (event: Record<string, unknown>) => {
         logger.info({ type: event['type'], channel: event['channel'] }, 'RTM event');
+
+        // Forward to webhook if configured
+        if (env.WEBHOOK_URL && env.WEBHOOK_SECRET) {
+          const bridgeEvent = mapRTMEvent(event);
+          if (bridgeEvent) {
+            deliverWebhook({ url: env.WEBHOOK_URL, secret: env.WEBHOOK_SECRET }, bridgeEvent, logger).catch((err) => {
+              logger.error({ error: err instanceof Error ? err.message : String(err) }, 'Webhook delivery failed');
+            });
+          }
+        }
       });
 
       rtm.on('error', (err: Error) => {
