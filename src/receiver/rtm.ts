@@ -152,7 +152,7 @@ export class RTMReceiver extends EventEmitter {
       }
     });
 
-    this.ws.on('close', (code, reason) => {
+    this.ws.on('close', (code: number, reason: Buffer) => {
       const reasonStr = reason?.toString() ?? `code ${code}`;
       this.logger.warn({ code, reason: reasonStr }, 'WebSocket closed');
       this.cleanup();
@@ -163,7 +163,7 @@ export class RTMReceiver extends EventEmitter {
       }
     });
 
-    this.ws.on('error', (err) => {
+    this.ws.on('error', (err: Error) => {
       this.logger.error({ error: err.message }, 'WebSocket error');
       this.emit('error', err);
     });

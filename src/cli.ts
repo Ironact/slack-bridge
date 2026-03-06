@@ -22,6 +22,9 @@ import { SlackOperationsAdapter } from './bridge/slack-adapter.js';
 import { RTMReceiver } from './receiver/rtm.js';
 import { deliverWebhook } from './bridge/webhook.js';
 import { mapRTMEvent } from './receiver/mapper.js';
+import type { SlackRTMEvent } from './receiver/types.js';
+import { OpenClawConnector } from './connector/openclaw.js';
+import { registerOutboundRoutes } from './connector/outbound.js';
 
 const program = new Command();
 
@@ -83,6 +86,8 @@ program
   .command('start')
   .description('Start the bridge server')
   .option('--workspace-id <id>', 'Workspace ID', 'default')
+  .option('--openclaw-url <url>', 'OpenClaw gateway URL')
+  .option('--openclaw-token <token>', 'OpenClaw gateway bearer token')
   .action(async (options) => {
     const env = parseEnv(process.env);
     const logger = createLogger(env);
@@ -140,10 +145,40 @@ program
         logger.warn('RTM disconnected, falling back to polling');
       });
 
+      // Set up OpenClaw connector if configured
+      const openclawUrl = options.openclawUrl ?? env.OPENCLAW_GATEWAY_URL;
+      const openclawToken = options.openclawToken ?? env.OPENCLAW_GATEWAY_TOKEN;
+      const botUserId = env.SLACK_BOT_USER_ID;
+
+      if (openclawUrl && openclawToken && botUserId) {
+        const connector = new OpenClawConnector({
+          gatewayUrl: openclawUrl,
+          gatewayToken: openclawToken,
+          botUserId,
+          logger,
+        });
+
+        rtm.on('slack_event', (event: Record<string, unknown>) => {
+          connector.forwardEvent(event as SlackRTMEvent).catch((err) => {
+            logger.error({ error: err instanceof Error ? err.message : String(err) }, 'OpenClaw forward failed');
+          });
+        });
+
+        logger.info({ gatewayUrl: openclawUrl }, '🔗 OpenClaw connector enabled');
+      }
+
       await rtm.start();
       logger.info('📡 RTM connected — receiving real-time events');
 
-      const app = createBridgeServer({ env, logger, slack: new SlackOperationsAdapter(slackClient) });
+      const slackOps = new SlackOperationsAdapter(slackClient);
+      const app = createBridgeServer({ env, logger, slack: slackOps });
+
+      // Register OpenClaw outbound route if configured
+      if (openclawUrl && openclawToken) {
+        registerOutboundRoutes(app, { token: openclawToken, logger, slack: slackOps });
+        logger.info('🔗 OpenClaw outbound route registered');
+      }
+
       await startBridgeServer(app, { host: env.HOST, port: env.PORT, logger });
 
       const shutdown = async () => {
