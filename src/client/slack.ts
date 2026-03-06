@@ -63,16 +63,16 @@ export class SlackClient {
     this.userCache = new TTLCache<SlackUser>(config.userCacheTtlMs ?? 3_600_000);
     this.channelCache = new TTLCache<SlackChannel>(config.channelCacheTtlMs ?? 1_800_000);
     this.rateLimiter = new RateLimiter({
-      maxPerMinute: config.maxApiPerMinute ?? 40,
+      globalMaxPerMinute: config.maxApiPerMinute ?? 40,
       minDelayMs: config.minApiDelayMs ?? 100,
-    });
+    }, config.logger);
   }
 
   // ─── Auth ───────────────────────────────────────────────
 
   async testAuth(): Promise<AuthResult> {
     try {
-      await this.rateLimiter.acquire();
+      await this.rateLimiter.waitForSlot("api.call");
       const result = await this.raw.auth.test();
       return {
         ok: result.ok ?? false,
@@ -95,7 +95,7 @@ export class SlackClient {
     replyBroadcast?: boolean;
   }): Promise<ActionResult> {
     try {
-      await this.rateLimiter.acquire();
+      await this.rateLimiter.waitForSlot("api.call");
       const args: Record<string, unknown> = {
         channel: params.channel,
         text: params.text,
@@ -116,7 +116,7 @@ export class SlackClient {
     text: string;
   }): Promise<ActionResult> {
     try {
-      await this.rateLimiter.acquire();
+      await this.rateLimiter.waitForSlot("api.call");
       await this.raw.chat.update({
         channel: params.channel,
         ts: params.ts,
@@ -133,7 +133,7 @@ export class SlackClient {
     ts: string;
   }): Promise<ActionResult> {
     try {
-      await this.rateLimiter.acquire();
+      await this.rateLimiter.waitForSlot("api.call");
       await this.raw.chat.delete({
         channel: params.channel,
         ts: params.ts,
@@ -150,7 +150,7 @@ export class SlackClient {
     cursor?: string;
   }): Promise<ActionResult> {
     try {
-      await this.rateLimiter.acquire();
+      await this.rateLimiter.waitForSlot("api.call");
       const result = await this.raw.conversations.history({
         channel: params.channel,
         limit: params.limit ?? 50,
@@ -175,7 +175,7 @@ export class SlackClient {
     limit?: number;
   }): Promise<ActionResult> {
     try {
-      await this.rateLimiter.acquire();
+      await this.rateLimiter.waitForSlot("api.call");
       const result = await this.raw.conversations.replies({
         channel: params.channel,
         ts: params.ts,
@@ -202,7 +202,7 @@ export class SlackClient {
     emoji: string;
   }): Promise<ActionResult> {
     try {
-      await this.rateLimiter.acquire();
+      await this.rateLimiter.waitForSlot("api.call");
       await this.raw.reactions.add({
         channel: params.channel,
         timestamp: params.ts,
@@ -220,7 +220,7 @@ export class SlackClient {
     emoji: string;
   }): Promise<ActionResult> {
     try {
-      await this.rateLimiter.acquire();
+      await this.rateLimiter.waitForSlot("api.call");
       await this.raw.reactions.remove({
         channel: params.channel,
         timestamp: params.ts,
@@ -239,7 +239,7 @@ export class SlackClient {
     if (cached) return cached;
 
     try {
-      await this.rateLimiter.acquire();
+      await this.rateLimiter.waitForSlot("api.call");
       const result = await this.raw.users.info({ user: userId });
       if (result.user) {
         const user: SlackUser = {
@@ -265,7 +265,7 @@ export class SlackClient {
     if (cached) return cached;
 
     try {
-      await this.rateLimiter.acquire();
+      await this.rateLimiter.waitForSlot("api.call");
       const result = await this.raw.conversations.info({ channel: channelId });
       if (result.channel) {
         const ch = result.channel;
