@@ -18,6 +18,7 @@ import {
 } from './session/storage.js';
 import { createBridgeServer, startBridgeServer } from './bridge/server.js';
 import { SlackClient } from './client/slack.js';
+import { RTMReceiver } from './receiver/rtm.js';
 
 const program = new Command();
 
@@ -103,11 +104,33 @@ program
       }
       logger.info({ user: auth.userName, team: auth.teamName }, '✅ Auth verified');
 
+      // Start RTM receiver for real-time events
+      const rtm = new RTMReceiver({
+        credentials: session.credentials,
+        logger,
+      });
+
+      rtm.on('slack_event', (event: Record<string, unknown>) => {
+        logger.info({ type: event['type'], channel: event['channel'] }, 'RTM event');
+      });
+
+      rtm.on('error', (err: Error) => {
+        logger.error({ error: err.message }, 'RTM error');
+      });
+
+      rtm.on('fallback', () => {
+        logger.warn('RTM disconnected, falling back to polling');
+      });
+
+      await rtm.start();
+      logger.info('📡 RTM connected — receiving real-time events');
+
       const app = createBridgeServer({ env, logger, slack: slackClient });
       await startBridgeServer(app, { host: env.HOST, port: env.PORT, logger });
 
       const shutdown = async () => {
         logger.info('Shutting down...');
+        rtm.stop();
         await app.close();
         process.exit(0);
       };
