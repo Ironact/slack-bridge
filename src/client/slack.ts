@@ -4,7 +4,6 @@ import { TTLCache } from './cache.js';
 import { RateLimiter } from './rate-limiter.js';
 import type {
   SlackCredentials,
-  MessageResult,
   SlackMessage,
   SlackChannel,
   SlackUser,
