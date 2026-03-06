@@ -17,7 +17,8 @@ import {
   getStorageStatePath,
 } from './session/storage.js';
 import { createBridgeServer, startBridgeServer } from './bridge/server.js';
-import { SlackClient } from './client/slack.js';
+import { SlackClientWrapper } from './client/slack-client.js';
+import { SlackOperationsAdapter } from './bridge/slack-adapter.js';
 import { RTMReceiver } from './receiver/rtm.js';
 import { deliverWebhook } from './bridge/webhook.js';
 import { mapRTMEvent } from './receiver/mapper.js';
@@ -97,18 +98,23 @@ program
       const session = JSON.parse(raw) as { workspace: { name: string }; user: { name: string }; credentials: { token: string; cookie: string } };
       logger.info({ workspace: session.workspace.name, user: session.user.name }, 'Session loaded');
 
-      const slackClient = new SlackClient({ credentials: session.credentials, logger });
+      const slackClient = new SlackClientWrapper({
+        token: session.credentials.token,
+        cookie: session.credentials.cookie,
+        logger,
+      });
 
       const auth = await slackClient.testAuth();
       if (!auth.ok) {
-        logger.error({ error: auth.error }, 'Auth failed. Run "slack-bridge login" again.');
+        logger.error('Auth failed. Run "slack-bridge login" again.');
         process.exit(1);
       }
-      logger.info({ user: auth.userName, team: auth.teamName }, '✅ Auth verified');
+      logger.info({ user: auth.user, team: auth.team }, '✅ Auth verified');
 
       // Start RTM receiver for real-time events
       const rtm = new RTMReceiver({
         credentials: session.credentials,
+        client: slackClient,
         logger,
       });
 
@@ -137,7 +143,7 @@ program
       await rtm.start();
       logger.info('📡 RTM connected — receiving real-time events');
 
-      const app = createBridgeServer({ env, logger, slack: slackClient });
+      const app = createBridgeServer({ env, logger, slack: new SlackOperationsAdapter(slackClient) });
       await startBridgeServer(app, { host: env.HOST, port: env.PORT, logger });
 
       const shutdown = async () => {
@@ -179,13 +185,17 @@ program
       }
 
       const session = JSON.parse(raw) as { credentials: { token: string; cookie: string } };
-      const slackClient = new SlackClient({ credentials: session.credentials, logger });
+      const slackClient = new SlackClientWrapper({
+        token: session.credentials.token,
+        cookie: session.credentials.cookie,
+        logger,
+      });
 
       const auth = await slackClient.testAuth();
       if (auth.ok) {
-        logger.info({ user: auth.userName, team: auth.teamName }, '✅ Session valid');
+        logger.info({ user: auth.user, team: auth.team }, '✅ Session valid');
       } else {
-        logger.warn({ error: auth.error }, '❌ Session expired or invalid');
+        logger.warn('❌ Session expired or invalid');
       }
     } catch (err) {
       logger.error({ error: err instanceof Error ? err.message : String(err) }, 'Status check failed');

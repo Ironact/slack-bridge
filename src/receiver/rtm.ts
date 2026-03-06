@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
 import type { Logger } from '../config/logger.js';
 import type { SlackCredentials } from '../client/types.js';
+import type { SlackClientWrapper } from '../client/slack-client.js';
 import type {
   SlackRTMEvent,
   ReceiverMetrics,
@@ -11,6 +12,7 @@ import { DEFAULT_RECONNECT_CONFIG, getReconnectDelay } from './types.js';
 
 export interface RTMReceiverConfig {
   credentials: SlackCredentials;
+  client: SlackClientWrapper;
   logger: Logger;
   pingIntervalMs?: number;
   pongTimeoutMs?: number;
@@ -41,6 +43,7 @@ export interface RTMConnectResponse {
 export class RTMReceiver extends EventEmitter {
   private readonly logger: Logger;
   private readonly credentials: SlackCredentials;
+  private readonly client: SlackClientWrapper;
   private readonly pingIntervalMs: number;
   private readonly pongTimeoutMs: number;
   private readonly reconnectConfig: ReconnectConfig;
@@ -66,6 +69,7 @@ export class RTMReceiver extends EventEmitter {
     super();
     this.logger = config.logger;
     this.credentials = config.credentials;
+    this.client = config.client;
     this.pingIntervalMs = config.pingIntervalMs ?? 30_000;
     this.pongTimeoutMs = config.pongTimeoutMs ?? 10_000;
     this.reconnectConfig = {
@@ -101,20 +105,8 @@ export class RTMReceiver extends EventEmitter {
    * Call rtm.connect to get a WebSocket URL.
    */
   async rtmConnect(): Promise<RTMConnectResponse> {
-    const body = new URLSearchParams();
-    body.append('token', this.credentials.token);
-
-    const resp = await fetch('https://app.slack.com/api/rtm.connect', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Cookie': `d=${this.credentials.cookie}`,
-        'Origin': 'https://app.slack.com',
-      },
-      body: body.toString(),
-    });
-
-    return (await resp.json()) as RTMConnectResponse;
+    const result = await this.client.raw.apiCall('rtm.connect');
+    return result as RTMConnectResponse;
   }
 
   private async connect(): Promise<void> {

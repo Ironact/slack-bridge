@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { RTMReceiver } from '../../src/receiver/rtm.js';
 import type { Logger } from '../../src/config/logger.js';
+import type { SlackClientWrapper } from '../../src/client/slack-client.js';
 
 const mockLogger = {
   debug: vi.fn(),
@@ -14,6 +15,12 @@ const mockCredentials = {
   cookie: 'xoxd-test-cookie',
 };
 
+const mockClient = {
+  raw: {
+    apiCall: vi.fn(),
+  },
+} as unknown as SlackClientWrapper;
+
 describe('RTMReceiver', () => {
   let receiver: RTMReceiver;
 
@@ -21,6 +28,7 @@ describe('RTMReceiver', () => {
     vi.restoreAllMocks();
     receiver = new RTMReceiver({
       credentials: mockCredentials,
+      client: mockClient,
       logger: mockLogger,
       pingIntervalMs: 1000,
       pongTimeoutMs: 500,
@@ -49,7 +57,7 @@ describe('RTMReceiver', () => {
   });
 
   it('should emit error on rtm.connect failure', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
+    vi.mocked(mockClient.raw.apiCall).mockRejectedValue(new Error('Network error'));
 
     const errorPromise = new Promise<Error>((resolve) => {
       receiver.on('error', resolve);
@@ -65,9 +73,7 @@ describe('RTMReceiver', () => {
   });
 
   it('should emit error when rtm.connect returns not ok', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      json: () => Promise.resolve({ ok: false, error: 'invalid_auth' }),
-    }));
+    vi.mocked(mockClient.raw.apiCall).mockResolvedValue({ ok: false, error: 'invalid_auth' });
 
     const errorPromise = new Promise<Error>((resolve) => {
       receiver.on('error', resolve);
@@ -90,27 +96,19 @@ describe('RTMReceiver', () => {
 
   describe('rtmConnect', () => {
     it('should call rtm.connect with correct params', async () => {
-      const fetchMock = vi.fn().mockResolvedValue({
-        json: () => Promise.resolve({
-          ok: true,
-          url: 'wss://test.slack.com/ws',
-          self: { id: 'U123', name: 'test' },
-          team: { id: 'T123', name: 'testteam' },
-        }),
+      vi.mocked(mockClient.raw.apiCall).mockResolvedValue({
+        ok: true,
+        url: 'wss://test.slack.com/ws',
+        self: { id: 'U123', name: 'test' },
+        team: { id: 'T123', name: 'testteam' },
       });
-      vi.stubGlobal('fetch', fetchMock);
 
       const result = await receiver.rtmConnect();
 
       expect(result.ok).toBe(true);
       expect(result.url).toBe('wss://test.slack.com/ws');
 
-      const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe('https://app.slack.com/api/rtm.connect');
-      expect(options.method).toBe('POST');
-      expect((options.headers as Record<string, string>)['Content-Type']).toBe('application/x-www-form-urlencoded');
-      expect((options.headers as Record<string, string>)['Cookie']).toContain('xoxd-test-cookie');
-      expect(options.body).toContain('xoxc-test-token');
+      expect(mockClient.raw.apiCall).toHaveBeenCalledWith('rtm.connect');
     });
   });
 });
