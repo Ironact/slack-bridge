@@ -3,12 +3,14 @@
  */
 import type { Credentials, SessionData, SessionHealth, SessionMetadata } from '../auth/types.js';
 import { performLogin } from '../auth/login.js';
+import { extractCredentials } from '../auth/credentials.js';
 import {
   loadStorageState,
   saveMetadata,
   loadMetadata,
   getStorageStatePath,
 } from './storage.js';
+import { chromium } from 'playwright';
 import type { Logger } from '../config/logger.js';
 import type { Env } from '../config/env.js';
 
@@ -59,11 +61,23 @@ export class SessionManager {
     if (storageState) {
       this.logger.info({ workspaceId }, 'Found existing session, validating');
       try {
-        await this.loginAndExtract();
-        return;
+        // Try to extract and validate credentials from existing session
+        const credentials = await this.extractCredentialsFromStorageState(storageState);
+        if (credentials && this.validateFn) {
+          const isValid = await this.validateFn(credentials);
+          if (isValid) {
+            this.credentials = credentials;
+            this.status = 'active';
+            this.lastValidated = new Date();
+            this.consecutiveFailures = 0;
+            this.logger.info({ workspaceId }, 'Existing session credentials are valid, skipping login');
+            return;
+          }
+        }
+        this.logger.info({ workspaceId }, 'Stored session validation failed, performing fresh login');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn({ workspaceId, error: message }, 'Stored session invalid, performing fresh login');
+        this.logger.warn({ workspaceId, error: message }, 'Failed to validate stored session, performing fresh login');
       }
     }
 
@@ -209,6 +223,43 @@ export class SessionManager {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error({ error: message }, 'Login failed');
       throw error;
+    }
+  }
+
+  private async extractCredentialsFromStorageState(storageState: string): Promise<Credentials | null> {
+    let browser = null;
+    try {
+      // Create temporary file for storageState
+      const { writeFile, unlink } = await import('node:fs/promises');
+      const { join } = await import('node:path');
+      const { tmpdir } = await import('node:os');
+      
+      const tempPath = join(tmpdir(), `temp-storage-${Date.now()}.json`);
+      await writeFile(tempPath, storageState);
+
+      // Launch browser with existing storageState
+      browser = await chromium.launch({ headless: true });
+      const context = await browser.newContext({ storageState: tempPath });
+      const page = await context.newPage();
+      
+      // Navigate to workspace to trigger storageState loading
+      const workspaceUrl = this.env.SLACK_WORKSPACE_URL!;
+      await page.goto(workspaceUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+
+      // Extract credentials
+      const credentials = await extractCredentials(page);
+
+      // Cleanup
+      await unlink(tempPath).catch(() => {}); // Ignore cleanup errors
+      
+      return credentials;
+    } catch (error) {
+      this.logger.debug({ error }, 'Failed to extract credentials from storageState');
+      return null;
+    } finally {
+      if (browser) {
+        await browser.close();
+      }
     }
   }
 

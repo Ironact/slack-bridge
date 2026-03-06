@@ -64,6 +64,15 @@ export function createBridgeServer(config: BridgeServerConfig): FastifyInstance 
     }
   });
 
+  // ─── Slack availability check ─────────────────────────────
+
+  const requireSlack = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!slack) {
+      reply.code(503).send({ ok: false, error: 'Slack client not connected' });
+      return;
+    }
+  };
+
   // ─── Health ───────────────────────────────────────────────
 
   app.get('/api/v1/health', async (): Promise<BridgeHealth> => {
@@ -79,102 +88,74 @@ export function createBridgeServer(config: BridgeServerConfig): FastifyInstance 
 
   // ─── Messages ─────────────────────────────────────────────
 
-  app.post('/api/v1/messages/send', async (request, reply) => {
+  app.post('/api/v1/messages/send', { preHandler: requireSlack }, async (request, reply) => {
     const parsed = sendMessageSchema.safeParse(request.body);
     if (!parsed.success) {
       reply.code(400).send({ ok: false, error: parsed.error.issues });
       return;
     }
-    if (!slack) {
-      reply.code(503).send({ ok: false, error: 'Slack client not connected' });
-      return;
-    }
     eventsProcessed++;
-    return slack.sendMessage(parsed.data);
+    return slack!.sendMessage(parsed.data);
   });
 
-  app.post('/api/v1/messages/update', async (request, reply) => {
+  app.post('/api/v1/messages/update', { preHandler: requireSlack }, async (request, reply) => {
     const parsed = updateMessageSchema.safeParse(request.body);
     if (!parsed.success) {
       reply.code(400).send({ ok: false, error: parsed.error.issues });
       return;
     }
-    if (!slack) {
-      reply.code(503).send({ ok: false, error: 'Slack client not connected' });
-      return;
-    }
     eventsProcessed++;
-    return slack.updateMessage(parsed.data);
+    return slack!.updateMessage(parsed.data);
   });
 
-  app.post('/api/v1/messages/delete', async (request, reply) => {
+  app.post('/api/v1/messages/delete', { preHandler: requireSlack }, async (request, reply) => {
     const parsed = deleteMessageSchema.safeParse(request.body);
     if (!parsed.success) {
       reply.code(400).send({ ok: false, error: parsed.error.issues });
       return;
     }
-    if (!slack) {
-      reply.code(503).send({ ok: false, error: 'Slack client not connected' });
-      return;
-    }
     eventsProcessed++;
-    return slack.deleteMessage(parsed.data);
+    return slack!.deleteMessage(parsed.data);
   });
 
-  app.get('/api/v1/messages/history', async (request, reply) => {
+  app.get('/api/v1/messages/history', { preHandler: requireSlack }, async (request, reply) => {
     const parsed = historyQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       reply.code(400).send({ ok: false, error: parsed.error.issues });
       return;
     }
-    if (!slack) {
-      reply.code(503).send({ ok: false, error: 'Slack client not connected' });
-      return;
-    }
-    return slack.getHistory(parsed.data);
+    return slack!.getHistory(parsed.data);
   });
 
-  app.get('/api/v1/messages/thread', async (request, reply) => {
+  app.get('/api/v1/messages/thread', { preHandler: requireSlack }, async (request, reply) => {
     const parsed = threadQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       reply.code(400).send({ ok: false, error: parsed.error.issues });
       return;
     }
-    if (!slack) {
-      reply.code(503).send({ ok: false, error: 'Slack client not connected' });
-      return;
-    }
-    return slack.getThread(parsed.data);
+    return slack!.getThread(parsed.data);
   });
 
   // ─── Reactions ────────────────────────────────────────────
 
-  app.post('/api/v1/reactions/add', async (request, reply) => {
+  app.post('/api/v1/reactions/add', { preHandler: requireSlack }, async (request, reply) => {
     const parsed = reactionSchema.safeParse(request.body);
     if (!parsed.success) {
       reply.code(400).send({ ok: false, error: parsed.error.issues });
       return;
     }
-    if (!slack) {
-      reply.code(503).send({ ok: false, error: 'Slack client not connected' });
-      return;
-    }
     eventsProcessed++;
-    return slack.addReaction(parsed.data);
+    return slack!.addReaction(parsed.data);
   });
 
-  app.post('/api/v1/reactions/remove', async (request, reply) => {
+  app.post('/api/v1/reactions/remove', { preHandler: requireSlack }, async (request, reply) => {
     const parsed = reactionSchema.safeParse(request.body);
     if (!parsed.success) {
       reply.code(400).send({ ok: false, error: parsed.error.issues });
       return;
     }
-    if (!slack) {
-      reply.code(503).send({ ok: false, error: 'Slack client not connected' });
-      return;
-    }
     eventsProcessed++;
-    return slack.removeReaction(parsed.data);
+    return slack!.removeReaction(parsed.data);
   });
 
   // ─── Error handler ────────────────────────────────────────

@@ -35,7 +35,7 @@ export interface AuthResult {
 }
 
 export class SlackClientWrapper {
-  readonly raw: WebClient;
+  private _raw: WebClient;
   private readonly rateLimiter: RateLimiter;
   private readonly userCache: UserCache;
   private readonly channelCache: ChannelCache;
@@ -45,7 +45,7 @@ export class SlackClientWrapper {
   constructor(options: SlackClientOptions) {
     this.logger = options.logger;
 
-    this.raw = new WebClient(options.token, {
+    this._raw = new WebClient(options.token, {
       headers: {
         Cookie: `d=${options.cookie}`,
         Origin: 'https://app.slack.com',
@@ -64,19 +64,21 @@ export class SlackClientWrapper {
     this.channelCache = new ChannelCache(options.channelCacheTtlMs);
   }
 
+  get raw(): WebClient {
+    return this._raw;
+  }
+
   setTokenDeathHandler(handler: () => Promise<void>): void {
     this.onTokenDeath = handler;
   }
 
   updateCredentials(token: string, cookie: string): void {
     // Create a new WebClient with updated credentials
-    Object.assign(this, {
-      raw: new WebClient(token, {
-        headers: {
-          Cookie: `d=${cookie}`,
-          Origin: 'https://app.slack.com',
-        },
-      }),
+    this._raw = new WebClient(token, {
+      headers: {
+        Cookie: `d=${cookie}`,
+        Origin: 'https://app.slack.com',
+      },
     });
   }
 
@@ -207,9 +209,22 @@ export class SlackClientWrapper {
     }
   }
 
-  async getChannels(): Promise<ChannelInfo[]> {
-    const cached = this.channelCache.getAll();
-    if (cached) return cached;
+  /**
+   * Get all channels (bulk fetch).
+   * 
+   * ⚠️ WARNING: This violates the lazy loading principle by fetching up to 200 channels at once.
+   * Only use this method when you explicitly need all channels and understand the performance implications.
+   * For individual channel info, use getChannel(channelId) instead.
+   * 
+   * @param forceRefresh - Set to true to bypass cache and force a fresh fetch
+   */
+  async getChannels(forceRefresh = false): Promise<ChannelInfo[]> {
+    if (!forceRefresh) {
+      const cached = this.channelCache.getAll();
+      if (cached) return cached;
+    }
+
+    this.logger.warn('Performing bulk channel fetch (getChannels) - consider using lazy loading instead');
 
     await this.rateLimiter.waitForSlot('conversations.list');
     try {
