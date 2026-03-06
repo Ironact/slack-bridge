@@ -57,3 +57,15 @@ export { RateLimiter, DEFAULT_RATE_LIMIT_CONFIG } from './client/rate-limiter.js
 export type { RateLimitConfig } from './client/rate-limiter.js';
 export { TTLCache, UserCache, ChannelCache } from './client/cache.js';
 export type { UserInfo as CachedUserInfo, ChannelInfo } from './client/cache.js';
+
+// Receiver
+export { RTMReceiver } from './receiver/rtm.js';
+export { mapRTMEvent } from './receiver/mapper.js';
+export type {
+  SlackMessageEvent,
+  SlackReactionEvent,
+  SlackRTMEvent,
+  ReceiverMetrics,
+  ReconnectConfig,
+} from './receiver/types.js';
+export { getReconnectDelay, DEFAULT_RECONNECT_CONFIG } from './receiver/types.js';
