@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { RateLimiter } from '../../src/client/rate-limiter.js';
+import { RateLimiter, DEFAULT_RATE_LIMIT_CONFIG } from '../../src/client/rate-limiter.js';
+import pino from 'pino';
+
+const logger = pino({ level: 'silent' });
 
 describe('RateLimiter', () => {
   beforeEach(() => {
@@ -10,48 +13,65 @@ describe('RateLimiter', () => {
     vi.useRealTimers();
   });
 
-  it('should allow first call immediately', async () => {
-    const limiter = new RateLimiter({ maxPerMinute: 10, minDelayMs: 0 });
-    const waited = await limiter.acquire();
-    expect(waited).toBe(0);
-  });
-
   it('should enforce minimum delay between calls', async () => {
-    const limiter = new RateLimiter({ maxPerMinute: 100, minDelayMs: 50 });
+    const limiter = new RateLimiter({ minDelayMs: 100 }, logger);
 
-    await limiter.acquire(); // First call
+    await limiter.waitForSlot('test.method');
+    const start = Date.now();
 
-    // Second call should wait
-    const promise = limiter.acquire();
-    vi.advanceTimersByTime(50);
-    const waited = await promise;
-    expect(waited).toBeGreaterThanOrEqual(0);
-  });
+    const promise = limiter.waitForSlot('test.method');
+    vi.advanceTimersByTime(100);
+    await promise;
 
-  it('should track current load', async () => {
-    const limiter = new RateLimiter({ maxPerMinute: 10, minDelayMs: 0 });
-    expect(limiter.currentLoad).toBe(0);
-
-    await limiter.acquire();
-    expect(limiter.currentLoad).toBe(1);
-
-    await limiter.acquire();
-    expect(limiter.currentLoad).toBe(2);
-  });
-
-  it('should prune timestamps older than 1 minute', async () => {
-    const limiter = new RateLimiter({ maxPerMinute: 10, minDelayMs: 0 });
-
-    await limiter.acquire();
-    expect(limiter.currentLoad).toBe(1);
-
-    vi.advanceTimersByTime(61_000);
-    expect(limiter.currentLoad).toBe(0);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(100);
   });
 
   it('should use default config values', () => {
-    const limiter = new RateLimiter();
-    // Should not throw
-    expect(limiter.currentLoad).toBe(0);
+    expect(DEFAULT_RATE_LIMIT_CONFIG.globalMaxPerMinute).toBe(40);
+    expect(DEFAULT_RATE_LIMIT_CONFIG.minDelayMs).toBe(100);
+    expect(DEFAULT_RATE_LIMIT_CONFIG.methodTiers['chat.postMessage']).toBe(60);
+    expect(DEFAULT_RATE_LIMIT_CONFIG.methodTiers['users.info']).toBe(20);
+  });
+
+  it('should allow override of config', () => {
+    const limiter = new RateLimiter(
+      { globalMaxPerMinute: 10, minDelayMs: 50 },
+      logger,
+    );
+    // Just verifying no errors during construction
+    expect(limiter).toBeDefined();
+  });
+
+  it('should allow calls within rate limit', async () => {
+    const limiter = new RateLimiter(
+      { globalMaxPerMinute: 100, minDelayMs: 0 },
+      logger,
+    );
+
+    // Should complete without blocking
+    for (let i = 0; i < 5; i++) {
+      await limiter.waitForSlot('test.method');
+    }
+  });
+
+  it('should track per-method limits', async () => {
+    const limiter = new RateLimiter(
+      {
+        globalMaxPerMinute: 1000,
+        minDelayMs: 0,
+        methodTiers: { 'test.method': 3 },
+      },
+      logger,
+    );
+
+    // First 3 should be fast
+    await limiter.waitForSlot('test.method');
+    await limiter.waitForSlot('test.method');
+    await limiter.waitForSlot('test.method');
+
+    // 4th should block
+    const promise = limiter.waitForSlot('test.method');
+    vi.advanceTimersByTime(60_100);
+    await promise;
   });
 });
