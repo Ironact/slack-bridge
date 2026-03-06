@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "slack-bridge": "dist/cli.js"
+    "slack-bridge": "./dist/cli.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -17,7 +17,8 @@
     "lint": "eslint src/ tests/",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "prepare": "husky"
+    "prepare": "husky",
+    "e2e": "tsx scripts/e2e-test.ts"
   },
   "keywords": [
     "slack",
@@ -50,7 +51,7 @@
     "eslint": "^10.0.2",
     "husky": "^9.1.7",
     "tsup": "^8.4.0",
-    "tsx": "^4.19.3",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.56.1",
     "vitest": "^3.0.7"
