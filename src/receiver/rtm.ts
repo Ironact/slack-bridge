@@ -132,7 +132,9 @@ export class RTMReceiver extends EventEmitter {
   }
 
   private setupWebSocket(url: string): void {
-    this.ws = new WebSocket(url);
+    this.ws = new WebSocket(url, {
+      headers: { Cookie: 'd=' + this.credentials.cookie },
+    });
 
     this.ws.on('open', () => {
       this.logger.info('WebSocket connected');
