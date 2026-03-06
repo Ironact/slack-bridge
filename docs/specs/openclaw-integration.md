@@ -1,78 +1,134 @@
-# OpenClaw Integration Spec
+# OpenClaw Integration Spec (v2)
 
 ## 목표
-slack-bridge를 OpenClaw 채널 플러그인으로 연동하여, 슬랙에서 @멘션하면 AI가 자동 응답하는 구조 구현.
-
-## 현재 상태
-- ✅ slack-bridge: xoxc- 토큰으로 슬랙 메시지 송수신 가능
-- ✅ RTM WebSocket으로 실시간 이벤트 수신 가능
-- ✅ Bridge HTTP API (Fastify) 동작 중
-- ❌ OpenClaw → slack-bridge 연동 없음
-- ❌ 슬랙 메시지 수신 → AI 응답 파이프라인 없음
+slack-bridge를 OpenClaw 커스텀 채널 플러그인으로 연동.
+**송수신 모두 xoxc- 유저 토큰** → 봇 딱지 제로.
 
 ## 아키텍처
 
-### Option A: OpenClaw 내장 Slack 채널 활용 (추천)
-OpenClaw에 이미 Slack 채널 플러그인이 있음.
-- 공식 Slack 앱 생성 (Socket Mode)
-- xoxb- 봇 토큰 + xapp- 앱 토큰 사용
-- OpenClaw config에서 `channels.slack` 활성화
-- **장점**: 네이티브 지원, 스트리밍, 스레딩, 리액션 전부 동작
-- **단점**: "봇 딱지" 붙음 (Slack 앱으로 인식)
-
-### Option B: slack-bridge를 OpenClaw webhook으로 연결
-slack-bridge RTM 수신 → webhook → OpenClaw system event
-- slack-bridge가 RTM으로 메시지 수신
-- @VISION 멘션 감지 시 OpenClaw에 webhook POST
-- OpenClaw가 응답 생성
-- 응답을 slack-bridge HTTP API로 전송하여 슬랙에 게시
-- **장점**: 봇 딱지 없음, 사람 계정으로 대화
-- **단점**: 커스텀 연동 필요, OpenClaw webhook 수신 설정 필요
-
-### Option C: Hybrid (추천 최종안)
-- **수신**: OpenClaw 내장 Slack 채널 (Socket Mode) — 안정적 이벤트 수신
-- **송신**: slack-bridge (xoxc- 토큰) — 봇 딱지 없이 메시지 전송
-- OpenClaw가 메시지 수신하면 AI가 응답 생성
-- 응답을 slack-bridge API로 보내서 사람 계정으로 전송
-- **장점**: 안정적 수신 + 봇 딱지 없는 송신
-
-## 구현 계획
-
-### Phase 1: OpenClaw 내장 Slack 채널 활성화
-1. Slack 앱 생성 (Socket Mode)
-   - Bot Token (xoxb-), App Token (xapp-)
-   - 필요 스코프: chat:write, channels:history, im:history, app_mentions:read, etc
-2. OpenClaw config에 channels.slack 추가
-3. 테스트: 슬랙 DM → AI 응답 동작 확인
-
-### Phase 2: slack-bridge 송신 연동
-1. OpenClaw가 응답 시 slack-bridge API를 통해 전송하는 커스텀 훅
-2. 또는 OpenClaw Slack 채널의 userToken에 xoxc- 토큰 설정 시도
-   - `channels.slack.userToken`에 xoxc- 가능한지 검증
-   - `userTokenReadOnly: false`로 쓰기 허용
-
-### Phase 3: 완전 통합
-1. 슬랙에서 @멘션 → AI 응답 (사람 계정으로)
-2. 스레드, 리액션, 파일 전부 동작
-3. 텔레그램 + 슬랙 동시 운영
-
-## 환경 변수 (예상)
-```bash
-# OpenClaw Slack 채널
-SLACK_APP_TOKEN=xapp-...
-SLACK_BOT_TOKEN=xoxb-...
-
-# slack-bridge (사람 계정 송신용)
-SLACK_BRIDGE_URL=http://localhost:3847
-SLACK_BRIDGE_TOKEN=<bearer-token>
+```
+슬랙 채널/DM
+    ↕ (RTM WebSocket + SDK API, xoxc- 토큰)
+slack-bridge 서버 (Fastify + RTM)
+    ↕ (HTTP webhook 양방향)
+OpenClaw Gateway
+    ↕
+AI Agent (Vision)
 ```
 
-## 선행 작업
-- [ ] Slack 앱 생성 (의성이가 Ironact 워크스페이스에서)
-- [ ] Socket Mode 활성화 + 토큰 발급
-- [ ] OpenClaw config 업데이트
-- [ ] 테스트
+## 데이터 플로우
 
-## 참고
-- OpenClaw Slack 채널 문서: /opt/homebrew/lib/node_modules/openclaw/docs/channels/slack.md
-- slack-bridge repo: https://github.com/Ironact/slack-bridge
+### 인바운드 (슬랙 → AI)
+1. 슬랙 유저가 메시지 보냄 (or @VISION 멘션)
+2. RTM WebSocket이 이벤트 수신
+3. slack-bridge가 이벤트를 OpenClaw 포맷으로 변환
+4. OpenClaw webhook endpoint로 POST
+5. OpenClaw가 AI 세션에 메시지 주입
+6. AI가 응답 생성
+
+### 아웃바운드 (AI → 슬랙)
+1. AI가 응답 텍스트 생성
+2. OpenClaw가 slack-bridge API로 POST
+3. slack-bridge가 xoxc- 토큰으로 chat.postMessage
+4. 슬랙에 사람 계정(VISION)으로 메시지 게시
+
+## 모듈 구조
+
+### 1. OpenClaw Connector (신규)
+`src/connector/openclaw.ts`
+- RTM 이벤트 → OpenClaw webhook 포맷 변환
+- 멘션 필터링 (@VISION 또는 DM만 전달)
+- 메시지 메타데이터 (채널, 스레드, 유저 정보) 포함
+- OpenClaw webhook URL로 POST
+
+### 2. Outbound Handler (신규)
+`src/connector/outbound.ts`
+- OpenClaw로부터 응답 수신 (POST /api/v1/openclaw/reply)
+- 채널/스레드 타겟팅
+- slack-bridge의 Slack Client로 메시지 전송
+
+### 3. CLI 업데이트
+`src/cli.ts` — `slack-bridge start`에 OpenClaw 모드 추가
+- `--openclaw-url <url>` — OpenClaw webhook URL
+- `--openclaw-token <token>` — 인증 토큰
+- 또는 env: `OPENCLAW_WEBHOOK_URL`, `OPENCLAW_WEBHOOK_TOKEN`
+
+### 4. OpenClaw 커스텀 채널 플러그인 (대안)
+OpenClaw 플러그인 시스템으로 직접 등록할 수 있으면 더 깔끔.
+- `plugins.entries.slack-bridge`로 등록
+- 플러그인 manifest 작성
+- 리서치 필요: OpenClaw 커스텀 채널 플러그인 API
+
+## Webhook 포맷
+
+### 인바운드 (slack-bridge → OpenClaw)
+```json
+{
+  "type": "message",
+  "channel": { "id": "C0A4RS9QJFP", "name": "general" },
+  "user": { "id": "U123", "name": "abel", "displayName": "Abel Ko" },
+  "message": {
+    "ts": "1772774109.482149",
+    "text": "@VISION 안녕!",
+    "threadTs": null
+  },
+  "mentioned": true,
+  "workspace": { "id": "T0A37JX8BC4", "name": "Muhak 3-7" }
+}
+```
+
+### 아웃바운드 (OpenClaw → slack-bridge)
+```json
+{
+  "channel": "C0A4RS9QJFP",
+  "text": "안녕! 무엇을 도와줄까?",
+  "threadTs": "1772774109.482149",
+  "replyBroadcast": false
+}
+```
+
+## 환경 변수
+```bash
+# slack-bridge
+SLACK_BRIDGE_PORT=3847
+SLACK_BRIDGE_HOST=127.0.0.1
+
+# OpenClaw 연동
+OPENCLAW_WEBHOOK_URL=http://localhost:18789/webhook/slack-bridge
+OPENCLAW_WEBHOOK_TOKEN=<shared-secret>
+
+# 멘션 필터
+SLACK_MENTION_USER_ID=U_VISION_ID
+SLACK_FORWARD_DMS=true
+SLACK_FORWARD_MENTIONS=true
+```
+
+## 태스크 분배
+
+### Vision
+- [ ] OpenClaw 커스텀 채널/플러그인 API 리서치
+- [ ] OpenClaw config 연동 설계
+- [ ] Outbound handler 구현 (OpenClaw → slack-bridge → 슬랙)
+
+### Friday
+- [ ] OpenClaw Connector 모듈 구현 (RTM → webhook 변환)
+- [ ] CLI 업데이트 (--openclaw-* 옵션)
+- [ ] 인바운드 파이프라인 테스트
+
+### Jarvis
+- [ ] 통합 테스트 스크립트
+- [ ] E2E 테스트: 슬랙 멘션 → AI 응답 → 슬랙 게시
+- [ ] 문서/README 업데이트
+
+## 선행 조건
+- [x] slack-bridge 코어 완성 (Auth, Client, Bridge, RTM)
+- [x] 슬랙 로그인 + 토큰 추출 성공
+- [x] chat.postMessage 동작 확인
+- [ ] OpenClaw 플러그인 API 리서치 완료
+- [ ] VISION의 슬랙 user ID 확인
+
+## 마일스톤
+1. **M1**: OpenClaw connector + outbound handler 구현
+2. **M2**: 슬랙 @멘션 → AI 응답 동작 (수동 테스트)
+3. **M3**: 자동 시작 + 에러 핸들링 + 재연결
+4. **M4**: 스레드, 리액션, 파일 지원
