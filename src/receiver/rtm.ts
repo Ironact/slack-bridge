@@ -132,7 +132,14 @@ export class RTMReceiver extends EventEmitter {
   }
 
   private setupWebSocket(url: string): void {
-    this.ws = new WebSocket(url);
+    this.ws = new WebSocket(url, {
+      headers: {
+        Cookie: `d=${this.credentials.cookie}`,
+        Origin: 'https://app.slack.com',
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+      },
+    });
 
     this.ws.on('open', () => {
       this.logger.info('WebSocket connected');
