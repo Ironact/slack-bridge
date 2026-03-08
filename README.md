@@ -88,6 +88,18 @@ curl http://localhost:3000/health
                     └──────────────┘     └──────────────┘
 ```
 
+## Running as a Service
+
+For production use, run slack-bridge as a system service that auto-starts on boot:
+
+```bash
+# Install to a persistent location (NOT /tmp!)
+mkdir -p ~/.slack-bridge/logs
+cp -R dist node_modules package.json ~/.slack-bridge/
+```
+
+See **[Service Setup Guide](docs/guides/service-setup.md)** for full macOS (launchd) and Linux (systemd) instructions, including multi-instance setups.
+
 ## Development
 
 ```bash
