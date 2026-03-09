@@ -17,19 +17,27 @@ function createLogger() {
 }
 
 describe('OpenClawConnector', () => {
-  const gatewayUrl = 'https://openclaw.example.com';
+  const gatewayUrl = 'wss://openclaw.example.com';
   const gatewayToken = 'test-token-123';
+  const bridgeToken = 'bridge-token-456';
   const botUserId = 'U_BOT';
   let logger: ReturnType<typeof createLogger>;
   let connector: OpenClawConnector;
 
   beforeEach(() => {
     logger = createLogger();
-    connector = new OpenClawConnector({ gatewayUrl, gatewayToken, botUserId, logger });
+    connector = new OpenClawConnector({
+      gatewayUrl,
+      gatewayToken,
+      botUserId,
+      logger,
+      bridgeToken,
+      webhookPath: '/webhook/slack-bridge',
+    });
     vi.restoreAllMocks();
   });
 
-  it('should forward DM messages to OpenClaw gateway', async () => {
+  it('should forward DM messages to OpenClaw gateway webhook', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
@@ -46,18 +54,21 @@ describe('OpenClawConnector', () => {
 
     expect(fetchSpy).toHaveBeenCalledOnce();
     const [url, opts] = fetchSpy.mock.calls[0]!;
-    expect(url).toBe(`${gatewayUrl}/api/v1/gateway/system-event`);
+    // ws:// should be converted to http://, wss:// to https://
+    expect(url).toBe('https://openclaw.example.com/webhook/slack-bridge');
     expect(opts?.method).toBe('POST');
     expect(opts?.headers).toMatchObject({
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${gatewayToken}`,
+      'Authorization': `Bearer ${bridgeToken}`,
     });
 
     const body = JSON.parse(opts?.body as string);
-    expect(body.type).toBe('system_event');
-    expect(body.data.channel).toBe('D12345');
-    expect(body.data.channelType).toBe('dm');
-    expect(body.data.text).toBe('hello bot');
+    expect(body.type).toBe('message');
+    expect(body.channel).toEqual({ id: 'D12345' });
+    expect(body.user).toEqual({ id: 'U_USER' });
+    expect(body.message.text).toBe('hello bot');
+    expect(body.isDM).toBe(true);
+    expect(body.mentioned).toBe(false);
     expect(logger.info).toHaveBeenCalled();
   });
 
@@ -78,7 +89,8 @@ describe('OpenClawConnector', () => {
 
     expect(fetchSpy).toHaveBeenCalledOnce();
     const body = JSON.parse(fetchSpy.mock.calls[0]![1]?.body as string);
-    expect(body.data.channelType).toBe('channel');
+    expect(body.isDM).toBe(false);
+    expect(body.mentioned).toBe(true);
   });
 
   it('should ignore messages in channels without @mention', async () => {
@@ -193,6 +205,56 @@ describe('OpenClawConnector', () => {
     await connector.forwardEvent(event);
 
     const body = JSON.parse(fetchSpy.mock.calls[0]![1]?.body as string);
-    expect(body.data.threadTs).toBe('1234567890.000001');
+    expect(body.message.threadTs).toBe('1234567890.000001');
+  });
+
+  it('should convert ws:// to http:// in gateway URL', async () => {
+    const wsConnector = new OpenClawConnector({
+      gatewayUrl: 'ws://127.0.0.1:18789',
+      gatewayToken: 'token',
+      botUserId: 'U_BOT',
+      logger,
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+
+    await wsConnector.forwardEvent({
+      type: 'message',
+      channel: 'D12345',
+      user: 'U_USER',
+      text: 'test',
+      ts: '123',
+    });
+
+    const [url] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe('http://127.0.0.1:18789/webhook/slack-bridge');
+  });
+
+  it('should fall back to gatewayToken when bridgeToken not provided', async () => {
+    const fallbackConnector = new OpenClawConnector({
+      gatewayUrl: 'ws://127.0.0.1:18789',
+      gatewayToken: 'my-gateway-token',
+      botUserId: 'U_BOT',
+      logger,
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+
+    await fallbackConnector.forwardEvent({
+      type: 'message',
+      channel: 'D12345',
+      user: 'U_USER',
+      text: 'test',
+      ts: '123',
+    });
+
+    const [, opts] = fetchSpy.mock.calls[0]!;
+    expect(opts?.headers).toMatchObject({
+      'Authorization': 'Bearer my-gateway-token',
+    });
   });
 });
