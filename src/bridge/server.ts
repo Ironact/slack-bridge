@@ -26,17 +26,31 @@ export interface SlackOperations {
   removeReaction(params: { channel: string; ts: string; emoji: string }): Promise<BridgeActionResult>;
 }
 
+/**
+ * Callback that returns live health state from the RTM receiver + session.
+ */
+export interface HealthStateProvider {
+  websocket: BridgeHealth['websocket'];
+  session: BridgeHealth['session'];
+  lastEvent: string | null;
+  rtmEventsReceived: number;
+  rtmUptime: number | null;
+  reconnectCount: number;
+}
+
 export interface BridgeServerConfig {
   env: Env;
   logger: Logger;
   slack?: SlackOperations;
+  /** Optional callback to get live RTM/session health state */
+  getHealthState?: () => HealthStateProvider;
 }
 
 /**
  * Create and configure the Bridge Fastify server.
  */
 export function createBridgeServer(config: BridgeServerConfig): FastifyInstance {
-  const { env, logger, slack } = config;
+  const { env, logger, slack, getHealthState } = config;
 
   const startTime = Date.now();
   let eventsProcessed = 0;
@@ -76,13 +90,29 @@ export function createBridgeServer(config: BridgeServerConfig): FastifyInstance 
   // ─── Health ───────────────────────────────────────────────
 
   app.get('/api/v1/health', async (): Promise<BridgeHealth> => {
+    const healthState = getHealthState?.();
+
+    const websocket = healthState?.websocket ?? 'disconnected';
+    const session = healthState?.session ?? 'unknown';
+
+    // Determine overall status based on WebSocket state
+    let status: BridgeHealth['status'] = 'healthy';
+    if (websocket === 'disconnected') {
+      status = 'unhealthy';
+    } else if (websocket === 'reconnecting') {
+      status = 'degraded';
+    }
+
     return {
-      status: 'healthy',
+      status,
       uptime: Math.floor((Date.now() - startTime) / 1000),
-      session: 'unknown',
-      websocket: 'disconnected',
-      lastEvent: null,
+      session,
+      websocket,
+      lastEvent: healthState?.lastEvent ?? null,
       eventsProcessed,
+      rtmUptime: healthState?.rtmUptime ?? null,
+      reconnectCount: healthState?.reconnectCount ?? 0,
+      rtmEventsReceived: healthState?.rtmEventsReceived ?? 0,
     };
   });
 

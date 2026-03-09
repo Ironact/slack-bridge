@@ -111,4 +111,10 @@ export interface BridgeHealth {
   websocket: 'connected' | 'disconnected' | 'reconnecting';
   lastEvent: string | null;
   eventsProcessed: number;
+  /** Seconds since RTM WebSocket connected (null if never connected) */
+  rtmUptime?: number | null;
+  /** Number of RTM reconnection attempts */
+  reconnectCount?: number;
+  /** Total RTM events received (distinct from API eventsProcessed) */
+  rtmEventsReceived?: number;
 }

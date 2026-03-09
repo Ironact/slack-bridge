@@ -171,7 +171,29 @@ program
       logger.info('📡 RTM connected — receiving real-time events');
 
       const slackOps = new SlackOperationsAdapter(slackClient);
-      const app = createBridgeServer({ env, logger, slack: slackOps });
+      const app = createBridgeServer({
+        env,
+        logger,
+        slack: slackOps,
+        getHealthState: () => {
+          const metrics = rtm.getMetrics();
+          const wsMap: Record<string, 'connected' | 'disconnected' | 'reconnecting'> = {
+            rtm: 'connected',
+            polling: 'connected',
+            disconnected: 'disconnected',
+          };
+          return {
+            websocket: wsMap[metrics.mode] ?? 'disconnected',
+            session: 'valid', // auth was verified above
+            lastEvent: metrics.lastEventAt?.toISOString() ?? null,
+            rtmEventsReceived: metrics.eventsReceived,
+            rtmUptime: metrics.wsConnectedAt
+              ? Math.floor((Date.now() - metrics.wsConnectedAt.getTime()) / 1000)
+              : null,
+            reconnectCount: metrics.reconnectCount,
+          };
+        },
+      });
 
       // Register OpenClaw outbound route if configured
       if (openclawUrl && openclawToken) {
