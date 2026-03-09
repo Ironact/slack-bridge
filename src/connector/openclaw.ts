@@ -6,6 +6,10 @@ export interface OpenClawConnectorDeps {
   gatewayToken: string;
   botUserId: string;
   logger: Logger;
+  /** Webhook path on the gateway (default: /webhook/slack-bridge) */
+  webhookPath?: string;
+  /** Bridge token for webhook auth (if different from gatewayToken) */
+  bridgeToken?: string;
 }
 
 export class OpenClawConnector {
@@ -13,12 +17,26 @@ export class OpenClawConnector {
   private readonly gatewayToken: string;
   private readonly botUserId: string;
   private readonly logger: Logger;
+  private readonly webhookPath: string;
+  private readonly bridgeToken: string;
 
   constructor(deps: OpenClawConnectorDeps) {
     this.gatewayUrl = deps.gatewayUrl;
     this.gatewayToken = deps.gatewayToken;
     this.botUserId = deps.botUserId;
     this.logger = deps.logger;
+    this.webhookPath = deps.webhookPath ?? '/webhook/slack-bridge';
+    this.bridgeToken = deps.bridgeToken ?? deps.gatewayToken;
+  }
+
+  /**
+   * Build the HTTP base URL from the gateway URL.
+   * Converts ws:// → http://, wss:// → https://
+   */
+  private getHttpBaseUrl(): string {
+    return this.gatewayUrl
+      .replace(/^wss:\/\//i, 'https://')
+      .replace(/^ws:\/\//i, 'http://');
   }
 
   async forwardEvent(event: SlackRTMEvent): Promise<void> {
@@ -30,35 +48,37 @@ export class OpenClawConnector {
     if (msg.subtype) return;
     if (!msg.text || !msg.user || !msg.channel) return;
 
+    // Skip own messages to prevent echo loops
+    if (msg.user === this.botUserId) return;
+
     // Only forward if bot is @mentioned or it's a DM
     const isDM = msg.channel.startsWith('D');
     const isMentioned = msg.text.includes(`<@${this.botUserId}>`);
 
     if (!isDM && !isMentioned) return;
 
-    const systemText = `[Slack] <@${msg.user}> in <#${msg.channel}>: ${msg.text}`;
-
+    // Build InboundPayload matching the gateway plugin's expected format
     const payload = {
-      type: 'system_event',
-      data: {
-        channel: msg.channel,
-        channelType: isDM ? 'dm' : 'channel',
-        user: msg.user,
-        text: msg.text,
+      type: 'message',
+      channel: { id: msg.channel },
+      user: { id: msg.user },
+      message: {
         ts: msg.ts,
-        threadTs: msg.threadTs,
-        systemText,
+        text: msg.text,
+        threadTs: msg.threadTs ?? null,
       },
+      mentioned: isMentioned,
+      isDM,
     };
 
-    const url = `${this.gatewayUrl}/api/v1/gateway/system-event`;
+    const url = `${this.getHttpBaseUrl()}${this.webhookPath}`;
 
     try {
       const resp = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.gatewayToken}`,
+          'Authorization': `Bearer ${this.bridgeToken}`,
         },
         body: JSON.stringify(payload),
       });
@@ -73,7 +93,7 @@ export class OpenClawConnector {
       }
 
       this.logger.info(
-        { channel: msg.channel, user: msg.user, isDM },
+        { channel: msg.channel, user: msg.user, isDM, mentioned: isMentioned },
         'Forwarded event to OpenClaw',
       );
     } catch (err) {

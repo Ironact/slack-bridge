@@ -156,6 +156,8 @@ program
           gatewayToken: openclawToken,
           botUserId,
           logger,
+          webhookPath: env.WEBHOOK_PATH ?? '/webhook/slack-bridge',
+          bridgeToken: env.WEBHOOK_SECRET ?? openclawToken,
         });
 
         rtm.on('slack_event', (event: Record<string, unknown>) => {
