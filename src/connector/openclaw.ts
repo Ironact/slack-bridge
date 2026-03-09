@@ -48,6 +48,9 @@ export class OpenClawConnector {
     if (msg.subtype) return;
     if (!msg.text || !msg.user || !msg.channel) return;
 
+    // Skip own messages to prevent echo loops
+    if (msg.user === this.botUserId) return;
+
     // Only forward if bot is @mentioned or it's a DM
     const isDM = msg.channel.startsWith('D');
     const isMentioned = msg.text.includes(`<@${this.botUserId}>`);
