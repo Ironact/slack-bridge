@@ -169,7 +169,8 @@ describe('OpenClawConnector', () => {
     );
   });
 
-  it('should log error when fetch throws', async () => {
+  it('should log error when fetch throws (with retries)', async () => {
+    vi.useFakeTimers();
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network error'));
 
     const event: SlackRTMEvent = {
@@ -180,11 +181,16 @@ describe('OpenClawConnector', () => {
       ts: '123',
     };
 
-    await connector.forwardEvent(event);
+    const promise = connector.forwardEvent(event);
+    // Fast-forward through retry delays
+    await vi.advanceTimersByTimeAsync(10_000);
+    await promise;
+
+    vi.useRealTimers();
 
     expect(logger.error).toHaveBeenCalledWith(
       expect.objectContaining({ error: 'network error' }),
-      'Failed to forward event to OpenClaw',
+      'Failed to forward event to OpenClaw (all retries exhausted)',
     );
   });
 
