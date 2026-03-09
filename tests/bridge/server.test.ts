@@ -35,7 +35,19 @@ const mockSlack: SlackOperations = {
   removeReaction: vi.fn().mockResolvedValue({ ok: true }),
 };
 
-const app = createBridgeServer({ env: mockEnv, logger: mockLogger, slack: mockSlack });
+const app = createBridgeServer({
+  env: mockEnv,
+  logger: mockLogger,
+  slack: mockSlack,
+  getHealthState: () => ({
+    websocket: 'connected' as const,
+    session: 'valid' as const,
+    lastEvent: new Date().toISOString(),
+    rtmEventsReceived: 0,
+    rtmUptime: 100,
+    reconnectCount: 0,
+  }),
+});
 
 beforeAll(async () => {
   await app.listen({ port: 0 });
